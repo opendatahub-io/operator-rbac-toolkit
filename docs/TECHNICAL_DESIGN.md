@@ -10,9 +10,11 @@
 6. [Component 3: Defense-in-Depth Toolkit](#6-component-3-defense-in-depth-toolkit)
 7. [Threat Model](#7-threat-model)
 8. [Key Architectural Tradeoffs](#8-key-architectural-tradeoffs)
-9. [Performance Characteristics](#9-performance-characteristics)
-10. [Migration from operator-security-runtime v1](#10-migration-from-operator-security-runtime-v1)
-11. [Known Limitations](#11-known-limitations)
+9. [Observability](#9-observability)
+10. [Performance Characteristics](#10-performance-characteristics)
+11. [Kubernetes Version Compatibility](#11-kubernetes-version-compatibility)
+12. [Migration from operator-security-runtime v1](#12-migration-from-operator-security-runtime-v1)
+13. [Known Limitations](#13-known-limitations)
 
 ---
 
@@ -79,11 +81,11 @@ Community feedback, including from former Operator-SDK and OLM contributors, con
 
 ### 2.1 Trust Domain Separation
 
-The operator and the RBAC management authority must be separate entities with separate ServiceAccounts. Compromising the operator must not compromise RBAC management. This is the core architectural change from v1.
+The RBAC management authority should be a separate entity from the operators it manages, with a separate ServiceAccount. Compromising an operator should not compromise RBAC management. This is the core architectural change from v1. The standalone controller deployment achieves full separation. The embedded library deployment (section 5.2) trades some separation for deployment convenience; section 7.3.1 documents the reduced guarantees.
 
 ### 2.2 Operators Are RBAC Consumers, Not Producers
 
-Operators should never create, modify, or delete Roles, ClusterRoles, RoleBindings, or ClusterRoleBindings for their own ServiceAccount. They should not require the `escalate`, `bind`, or any RBAC write verbs. Operators consume permissions granted by external authorities.
+Operator-side components (the operator itself and the graceful degradation library) should never create, modify, or delete Roles, ClusterRoles, RoleBindings, or ClusterRoleBindings. They should not require the `escalate`, `bind`, or any RBAC write verbs. Operators consume permissions granted by external authorities. Admin-side components (the scoping controller, impersonation guard) operate in the admin trust domain and may manage RBAC resources as part of their designated function.
 
 ### 2.3 Graceful Degradation Over Fail-Fast
 
@@ -135,7 +137,7 @@ Operator Author                       Cluster Admin
 
 ### 3.2 Component Interaction Model
 
-The three components are independent. They do not require each other and have no runtime dependencies between them:
+The three components are independent. They do not require each other to function:
 
 - An operator can use the graceful degradation library without the scoping controller being deployed.
 - The scoping controller can manage RBAC for operators that don't use the graceful degradation library.
@@ -147,15 +149,24 @@ When all three are deployed together, they provide complementary coverage:
 2. The **graceful degradation library** ensures the operator handles missing permissions cleanly during transitions (CR creation before RoleBinding provisioning, admin RBAC changes mid-reconcile).
 3. The **defense-in-depth toolkit** provides additional protection layers (SA identity protection, impersonation hardening, permission auditing).
 
+**Asymmetry note:** The graceful degradation library detects under-grants (operator lacks permissions it needs) but not over-grants (operator retains permissions it should no longer have, e.g., orphan RoleBindings during cross-namespace cleanup latency). Over-grant detection is the scoping controller's responsibility via its garbage collection mechanisms.
+
 ### 3.3 Alternatives Considered
 
 | Approach | Pros | Cons | Decision |
 |----------|------|------|----------|
 | Operator self-manages RBAC (v1) | Zero-friction deployment, single binary | Violates trust domain separation, requires escalate/bind verbs, community consensus against it | Rejected as primary model; redesigned into separated components |
 | Pure admission policies (VAPs/OPA) | No RBAC manipulation, uses existing K8s primitives | Admission policies do not intercept GET/LIST/WATCH requests; cannot restrict read access | Used as defense-in-depth complement, not primary mechanism |
-| Authorization webhook (KEP-4601) | Works at authorization layer, intercepts all operations including reads | Adds latency to every API call, requires K8s 1.34+, complex to implement | Future direction, not current dependency |
+| Authorization with Selectors (KEP-4601) | Works at authorization layer, intercepts all operations including reads | Adds latency to every API call, requires K8s 1.31+ (alpha), complex to implement | Future direction, not current dependency. See [KEP-4601](https://github.com/kubernetes/enhancements/issues/4601) |
 | Kubectl plugin for static RBAC generation | Zero runtime components, admin-controlled | Does not dynamically adjust as CRs are created/deleted | Complementary tool, not primary mechanism |
 | OLM OperatorGroups with scoped ServiceAccounts | Upstream-supported, admin-controlled | Only works with OLM-managed operators, does not handle dynamic namespace scoping | Supported as an alternative deployment model |
+
+### 3.4 Coexistence with OLM and Helm RBAC
+
+The scoping controller can coexist with OLM OperatorGroups and Helm-managed RBAC:
+
+- **OLM OperatorGroups.** OLM creates RoleBindings for operators based on OperatorGroup configuration. The scoping controller creates independently-named RoleBindings (`<name>-scoped-binding`). Both can coexist; they manage different RoleBinding resources for the same SA. During migration, the OLM-managed bindings can be removed after the scoping controller is verified.
+- **Helm RBAC.** Helm charts with `rbac.create: true` create static RBAC resources. The scoping controller's RoleBindings are additive. Set `rbac.create: false` in the Helm chart after migrating to scoped bindings if the chart's ClusterRoleBinding is the resource being replaced.
 
 ---
 
@@ -179,14 +190,12 @@ The library wraps controller-runtime client operations with permission-aware err
 4. The reconciler returns a `RequeueAfter` result to retry when permissions may have changed.
 
 ```go
-// Operator author's reconciler
 func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
     cr := &v1alpha1.MyCR{}
     if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
         return ctrl.Result{}, client.IgnoreNotFound(err)
     }
 
-    // Attempt to list secrets in the CR's namespace
     secrets := &corev1.SecretList{}
     result, err := graceful.Do(ctx, r.Client, cr, func() error {
         return r.List(ctx, secrets, client.InNamespace(cr.Namespace))
@@ -195,33 +204,30 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
         return result, err
     }
     if result.RequeueAfter > 0 {
-        // Permission was denied, status condition is set, event emitted.
-        // Reconciler will retry after the requeue interval.
         return result, nil
     }
 
     // Permission was granted, proceed with secrets.Items
-    // ...
 }
 ```
 
 #### 4.2.2 Permission Discovery
 
-At startup or on demand, the library performs `SelfSubjectAccessReview` checks to discover the operator's actual permissions. This produces a structured report of what the operator can and cannot do:
+At startup or on demand, the library performs `SelfSubjectAccessReview` checks to discover the operator's actual permissions. SSAR calls are rate-limited (default: 10 concurrent, configurable) to avoid overwhelming the API server during startup in clusters with many namespaces.
 
 ```go
-// During operator startup
 report, err := graceful.DiscoverPermissions(ctx, client, graceful.PermissionSpec{
     Resources: []graceful.ResourceSpec{
         {Group: "", Resource: "secrets", Verbs: []string{"get", "list", "create"}},
         {Group: "", Resource: "configmaps", Verbs: []string{"get", "list"}},
     },
-    Namespaces: []string{"notebooks", "model-registry", "redhat-ods-applications"},
+    Namespaces: []string{"notebooks", "model-registry"},
+    MaxConcurrency: 10,
 })
 
-// report.Granted:  [{secrets, get, notebooks}, {secrets, list, notebooks}, ...]
-// report.Denied:   [{secrets, get, kube-system}, {secrets, list, kube-system}, ...]
-// report.Summary:  "12/18 permissions granted across 3 namespaces"
+// report.Granted:  [{secrets, get, notebooks}, ...]
+// report.Denied:   [{secrets, get, kube-system}, ...]
+// report.Summary:  "8/10 permissions granted across 2 namespaces"
 ```
 
 #### 4.2.3 Status Condition Management
@@ -283,10 +289,12 @@ The controller runs with its own ServiceAccount, separate from the operators it 
 
 The scoping controller is available as:
 
-1. **Standalone binary** (`cmd/scoper`). Cluster admins deploy it as a separate Deployment. Suitable for clusters without an existing platform operator.
-2. **Importable Go package** (`pkg/scoper`). Platform operators (e.g., the RHOAI operator, which already reconciles DSC/DSCI) embed the scoping logic into their existing reconciliation loop. Zero additional deployment friction.
+1. **Standalone binary** (`cmd/scoper`). Cluster admins deploy it as a separate Deployment with leader election enabled (recommended: 2 replicas). Suitable for clusters without an existing platform operator.
+2. **Importable Go package** (`pkg/scoper`). Platform operators (e.g., the RHOAI operator, which already reconciles DSC/DSCI) embed the scoping logic into their existing reconciliation loop. Zero additional deployment friction. The embedded library inherits the host operator's leader election and HA configuration.
 
 Both options use the same `pkg/scoper` library. The standalone binary is a thin wrapper that reads configuration from a ConfigMap and starts the controller.
+
+**Security note on embedded mode:** When the scoping controller is embedded in a platform operator, it shares that operator's ServiceAccount. This collapses the trust domain separation (see section 7.3.1). The embedded mode trades trust domain separation for deployment convenience. Use the standalone binary when full trust domain separation is required.
 
 ### 5.3 How It Works
 
@@ -304,16 +312,29 @@ type ScopingTarget struct {
     TargetSA types.NamespacedName
 
     // The ClusterRole to reference in the RoleBinding.
-    // This ClusterRole must be pre-deployed by the admin.
+    // This ClusterRole must be pre-deployed by the admin and MUST NOT
+    // use aggregationRule (see section 5.4).
     ClusterRoleName string
 
     // The name to use for managed RoleBindings.
     // Deterministic naming enables drift detection and cleanup.
     ManagedRoleBindingName string
+
+    // Optional: restrict which namespaces are watched.
+    // If nil, all namespaces are watched. Required for multi-tenant clusters.
+    NamespaceSelector *metav1.LabelSelector
+
+    // Optional: create the RoleBinding in a different namespace than the CR.
+    // If nil, the RoleBinding is created in the CR's namespace.
+    // The target namespace is read from the specified field in the CR.
+    // WARNING: This field value is untrusted input. The controller validates
+    // it against NamespaceSelector and the deny-list before creating
+    // RoleBindings. See section 5.3.5 for details.
+    TargetNamespaceSource *NamespaceSource
 }
 ```
 
-For the standalone binary, this configuration is provided via a ConfigMap:
+For the standalone binary, this configuration is provided via a ConfigMap. The controller reads this ConfigMap at startup and **requires a restart** to pick up changes (hot-reload is not supported to avoid complexity in a security-critical component). The ConfigMap must reside in a privileged admin namespace with restricted access.
 
 ```yaml
 apiVersion: v1
@@ -332,22 +353,26 @@ data:
         namespace: redhat-ods-applications
       clusterRoleName: odh-dashboard-scoped
       managedRoleBindingName: odh-dashboard-scoped-binding
+      namespaceSelector:
+        matchLabels:
+          opendatahub.io/dashboard: "true"
+    - watchGVK:
+        group: dashboard.opendatahub.io
+        version: v1alpha1
+        kind: OdhDashboardConfig
+      targetSA:
+        name: odh-dashboard
+        namespace: redhat-ods-applications
+      clusterRoleName: odh-dashboard-notebooks
+      managedRoleBindingName: odh-dashboard-notebooks-binding
+      targetNamespaceSource:
+        fieldPath: ".spec.notebookController.notebookNamespace"
 ```
 
-For the importable package, configuration is provided programmatically:
-
-```go
-scoper, err := scoper.New(mgr, scoper.Config{
-    Targets: []scoper.ScopingTarget{
-        {
-            WatchGVK:               schema.GroupVersionKind{Group: "dashboard.opendatahub.io", Version: "v1alpha1", Kind: "OdhDashboardConfig"},
-            TargetSA:               types.NamespacedName{Name: "odh-dashboard", Namespace: "redhat-ods-applications"},
-            ClusterRoleName:        "odh-dashboard-scoped",
-            ManagedRoleBindingName: "odh-dashboard-scoped-binding",
-        },
-    },
-})
-```
+**Startup behavior:**
+- If the ConfigMap is malformed, the controller fails fast at startup with a descriptive error. It does not start with empty configuration.
+- If a referenced ClusterRole does not exist, the controller logs a warning and emits a Kubernetes event but continues to process other targets. RoleBindings referencing non-existent ClusterRoles are not created; the condition is re-checked on each reconciliation.
+- If a configured GVK's CRD is not yet installed, the controller retries CRD discovery with exponential backoff (1s, 2s, 4s, ... up to 60s). This handles the case where the scoping controller starts before the operator whose CRDs it watches.
 
 #### 5.3.2 CR Lifecycle Flow
 
@@ -358,15 +383,27 @@ CR Created in namespace "foo"
 Controller detects CR via watch
     |
     v
-Does RoleBinding "odh-dashboard-scoped-binding" exist in "foo"?
+Does namespace "foo" match NamespaceSelector? (if configured)
     |
-    +-- No --> Create RoleBinding referencing static ClusterRole
-    |          with OwnerReference pointing to the CR
-    |
-    +-- Yes --> Check if OwnerReference for this CR exists
-                    |
-                    +-- No --> Add OwnerReference to existing RoleBinding
-                    +-- Yes --> No-op (DeepEqual skip)
+    +-- No --> No-op (namespace not in scope)
+    +-- Yes (or no selector configured) -->
+        |
+        v
+    Does the referenced ClusterRole exist?
+        |
+        +-- No --> Log warning, emit event, requeue
+        +-- Yes -->
+            |
+            v
+        Does RoleBinding "odh-dashboard-scoped-binding" exist in "foo"?
+            |
+            +-- No --> Create RoleBinding referencing static ClusterRole
+            |          with OwnerReference pointing to the CR
+            |
+            +-- Yes --> Check if OwnerReference for this CR exists
+                            |
+                            +-- No --> Patch to add OwnerReference
+                            +-- Yes --> No-op (DeepEqual skip)
 
 CR Deleted in namespace "foo"
     |
@@ -382,31 +419,27 @@ Are there remaining OwnerReferences?
 
 #### 5.3.3 Multi-CR Ownership
 
-Multiple CRs of the same or different GVKs can exist in the same namespace. The controller uses Kubernetes OwnerReferences to track which CRs require the RoleBinding. The RoleBinding is only deleted when no CRs remain in the namespace.
+Multiple CRs of the same or different GVKs can exist in the same namespace. The controller uses Kubernetes OwnerReferences to track which CRs require the RoleBinding. The RoleBinding is only deleted when no CRs remain in the namespace. OwnerReference updates use `patch` (strategic merge patch) to avoid conflicts with concurrent modifications.
 
 #### 5.3.4 Cross-Namespace Grants
 
-When an operator needs access to a namespace different from where its CR exists (e.g., the Dashboard CR is in `redhat-ods-applications` but needs access to `rhods-notebooks`), the controller supports cross-namespace targets:
-
-```go
-ScopingTarget{
-    WatchGVK:               gvk,
-    TargetSA:               types.NamespacedName{Name: "odh-dashboard", Namespace: "redhat-ods-applications"},
-    ClusterRoleName:        "odh-dashboard-notebooks",
-    ManagedRoleBindingName: "odh-dashboard-notebooks-binding",
-    // TargetNamespaceSource specifies where to create the RoleBinding.
-    // Instead of creating it in the CR's namespace, create it in the
-    // namespace specified by a field in the CR or a DSC/DSCI field.
-    TargetNamespaceSource: scoper.NamespaceFromField(".spec.notebookController.notebookNamespace"),
-}
-```
+When an operator needs access to a namespace different from where its CR exists (e.g., the Dashboard CR is in `redhat-ods-applications` but needs access to `rhods-notebooks`), the controller supports cross-namespace targets via `TargetNamespaceSource`.
 
 For cross-namespace RoleBindings, OwnerReferences cannot be used (Kubernetes does not allow cross-namespace OwnerReferences). The controller uses annotation-based ownership instead:
 
 - Annotation key: `operator-rbac-toolkit.io/scoped-access-owners`
 - Annotation value: comma-separated list of `namespace/name/uid` entries
+- Maximum annotation size: 256KB (Kubernetes limit). At ~60 bytes per entry, this supports ~4000 owner entries, which is well beyond any realistic scenario.
+- Concurrent updates: handled via optimistic concurrency with retry-on-conflict (standard controller-runtime pattern).
+- Malformed entries: skipped during parsing, not fatal. A warning is logged for each skipped entry.
 
-This is the same proven approach used in operator-security-runtime v1.
+#### 5.3.5 Cross-Namespace Input Validation
+
+The `TargetNamespaceSource` field reads a namespace name from a CR field. This is untrusted input: a user who can create or modify the CR can set this field to any namespace (e.g., `kube-system`). The controller validates the target namespace before creating a RoleBinding:
+
+1. **Deny-list check.** The target namespace is checked against a built-in deny-list (kube-system, kube-public, kube-node-lease, default). This is enforced in the controller itself, independent of VAPs.
+2. **NamespaceSelector check.** If a `NamespaceSelector` is configured on the target, the target namespace must match it.
+3. **VAP enforcement.** The `deny-rolebinding-in-protected-namespaces` and `allow-rolebinding-in-labeled-namespaces` VAPs provide API-server-enforced validation as defense-in-depth.
 
 ### 5.4 Static ClusterRole Requirement
 
@@ -414,11 +447,17 @@ The scoping controller uses **bind mode only**. It creates RoleBindings that ref
 
 The static ClusterRole defines the permission ceiling. It must be deployed by the cluster admin as part of the operator's installation manifests (Helm chart, OLM CSV, Kustomize, or GitOps).
 
+**Requirements for the static ClusterRole:**
+
+1. **MUST NOT use `aggregationRule`.** If the ClusterRole uses aggregation, an attacker could inject additional rules by creating a ClusterRole with labels matching the aggregation selector, bypassing the static permission ceiling without modifying the ClusterRole directly. The scoping controller validates this at startup and refuses to reference an aggregated ClusterRole.
+2. **Should be protected by the `protect-static-clusterrole` VAP** to prevent runtime modification.
+
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: odh-dashboard-scoped
+  # No aggregationRule field
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -431,7 +470,7 @@ rules:
     verbs: ["create", "get"]
 ```
 
-The permission ceiling is enforced by Kubernetes RBAC itself (the static ClusterRole is immutable at runtime, not modifiable by the operator or the scoping controller). A compromised operator SA can only use permissions defined in this ClusterRole, and only in namespaces where RoleBindings exist.
+The permission ceiling is enforced by Kubernetes RBAC itself (the static ClusterRole is not modifiable by the operator or the scoping controller). A compromised operator SA can only use permissions defined in this ClusterRole, and only in namespaces where RoleBindings exist.
 
 ### 5.5 RBAC Requirements for the Scoping Controller
 
@@ -440,8 +479,9 @@ The scoping controller's ServiceAccount needs:
 | Permission | Purpose |
 |------------|---------|
 | `get`, `list`, `watch` on target CRDs | Detecting CR creation and deletion |
-| `get`, `create`, `update`, `delete` on `rolebindings` | Managing namespace-scoped RoleBindings |
+| `get`, `create`, `update`, `patch`, `delete` on `rolebindings` | Managing namespace-scoped RoleBindings (patch for OwnerReference updates) |
 | `bind` on the static ClusterRole (via `resourceNames`) | Creating RoleBindings that reference the static ClusterRole |
+| `get` on `clusterroles` (via `resourceNames`) | Startup validation of static ClusterRole (no aggregationRule) |
 
 The `bind` verb is scoped to specific ClusterRole names via `resourceNames`, preventing the controller from binding arbitrary ClusterRoles.
 
@@ -468,7 +508,7 @@ For cross-namespace RoleBindings (where the RoleBinding is in a different namesp
 
 1. Lists all managed RoleBindings (identified by the deterministic name).
 2. For each RoleBinding, parses the owner annotations.
-3. For each owner entry, checks if the referenced CR still exists.
+3. For each owner entry, checks if the referenced CR still exists **and** if the CR's GVK matches a configured scoping target. An annotation referencing a CR whose GVK is not in the scoping target configuration is treated as stale and removed.
 4. Removes stale owner entries.
 5. If no owners remain, deletes the RoleBinding.
 
@@ -478,15 +518,50 @@ This cleanup runs on a configurable interval (default: 5 minutes) and on every C
 
 On startup, the controller scans for managed RoleBindings whose owner CRs no longer exist. These orphans are cleaned up immediately. This handles the case where the controller was down when CRs were deleted.
 
-### 5.8 Design Decisions
+#### 5.7.4 Namespace Deletion
 
-**Why bind mode only (no escalate mode).** The `escalate` verb allows creating Roles with arbitrary rules, which is flagged as a privilege escalation risk by every security guide. Bind mode uses the `bind` verb scoped via `resourceNames`, which only allows referencing specific pre-deployed ClusterRoles. The permission ceiling is enforced by Kubernetes RBAC, not by application code. This is architecturally safer and passes SOC2/FedRAMP audits without exceptions.
+When a namespace is deleted, Kubernetes terminates all resources in it concurrently. For same-namespace RoleBindings, both the CR and the RoleBinding are deleted as part of namespace termination; no action is needed. For cross-namespace RoleBindings, the CR in the deleted namespace triggers the cleanup reconciler. If the controller cannot read the CR (namespace already gone), it treats the owner entry as stale and removes it on the next periodic scan.
 
-**Why the controller manages RoleBindings but not Roles.** Creating namespace-scoped Roles requires the `escalate` verb (to put rules into the Role) or the controller must already possess all permissions it grants. Using a pre-deployed static ClusterRole avoids both issues. The ClusterRole defines rules once; RoleBindings activate those rules in specific namespaces.
+### 5.8 Multi-Tenancy
+
+In multi-tenant clusters, the `NamespaceSelector` field on `ScopingTarget` restricts which namespaces the controller watches. Without a namespace selector, the controller watches all namespaces and creates RoleBindings for any CR of the configured GVK, which could cross tenant boundaries.
+
+Recommended multi-tenant deployment:
+- Configure `NamespaceSelector` with a tenant-specific label (e.g., `tenant: team-a`).
+- Use the `allow-rolebinding-in-labeled-namespaces` VAP to enforce that RoleBindings are only created in labeled namespaces.
+- Use the `protect-rbac-allowed-label` VAP to prevent non-admin label manipulation.
+- Alternatively, deploy separate scoping controller instances per tenant.
+
+### 5.9 CRD Version Changes
+
+The scoping controller watches CRs by GVK. If the CRD is upgraded from v1alpha1 to v1beta1 or v1, the controller's configuration must be updated to reflect the new version. The controller does not automatically follow CRD version promotions.
+
+When the CRD storage version changes:
+1. Update the scoping controller's ConfigMap with the new GVK version.
+2. Restart the controller.
+3. Existing RoleBindings are preserved. The controller will re-reconcile them against the new GVK.
+
+### 5.10 Day-2 Operator Upgrades
+
+When the operator being scoped is upgraded and requires new permissions (e.g., a new feature needs `create` on `persistentvolumeclaims`), the upgrade workflow is:
+
+1. **Update the static ClusterRole** to include the new rules. This must happen before the new operator version rolls out, or the operator will get `Forbidden` errors (which the graceful degradation library will surface as status conditions).
+2. **Update the scoping controller configuration** if the GVK or namespace selector changed.
+3. **Roll the new operator version.**
+
+If step 1 is applied after step 3 (out-of-order), the graceful degradation library surfaces `Degraded` status conditions until the ClusterRole is updated. No data loss or corruption occurs; the operator simply cannot perform the new operations until permissions are granted.
+
+### 5.11 Design Decisions
+
+**Why bind mode only (no escalate mode).** The `escalate` verb allows creating Roles with rules that exceed the creator's own permissions, which is flagged as a privilege escalation risk by every security guide. Without `escalate`, a controller can only create Roles whose rules are a subset of its own permissions. Bind mode uses the `bind` verb scoped via `resourceNames`, which only allows referencing specific pre-deployed ClusterRoles. The permission ceiling is enforced by Kubernetes RBAC, not by application code. This is architecturally safer and passes SOC2/FedRAMP audits without exceptions.
+
+**Why the controller manages RoleBindings but not Roles.** Using a pre-deployed static ClusterRole means the controller only needs the `bind` verb (scoped to specific ClusterRole names), not the `escalate` verb. The ClusterRole defines rules once; RoleBindings activate those rules in specific namespaces.
 
 **Why OwnerReferences for same-namespace, annotations for cross-namespace.** Kubernetes does not support cross-namespace OwnerReferences. Annotations provide the same ownership semantics without requiring a custom finalizer on every CR. The annotation format is designed for corruption resilience: malformed entries are skipped, not fatal.
 
-**Why a ConfigMap for standalone configuration, not a CRD.** A ConfigMap is simpler, requires no webhook or controller for validation, and avoids the bootstrapping problem of a CRD-based controller that needs permissions to watch its own CRD. For the importable package, configuration is programmatic and validated at construction time.
+**Why a ConfigMap for standalone configuration, not a CRD.** A ConfigMap is simpler, requires no webhook or controller for validation, and avoids the bootstrapping problem of a CRD-based controller that needs permissions to watch its own CRD. For the importable package, configuration is programmatic and validated at construction time. The ConfigMap must be in an admin-controlled namespace; a `protect-scoper-config` VAP template is provided to restrict write access.
+
+**Why no hot-reload.** Configuration changes to the scoping controller affect which RoleBindings exist and where. Hot-reloading introduces failure modes (partial config application, race between old and new targets) that are unacceptable in a security-critical component. A controller restart is a well-understood, atomic configuration transition.
 
 ---
 
@@ -494,7 +569,7 @@ On startup, the controller scans for managed RoleBindings whose owner CRs no lon
 
 ### 6.1 Overview
 
-The Defense-in-Depth Toolkit provides independent security mechanisms that complement the scoping controller and graceful degradation library. Each mechanism can be deployed independently. None require the operator to manage its own RBAC.
+The Defense-in-Depth Toolkit provides independent security mechanisms that complement the scoping controller and graceful degradation library. Each mechanism can be deployed independently. Admin-side components (impersonation guard) manage RBAC resources as part of their designated function in the admin trust domain (see design principle 2.2).
 
 ### 6.2 RBAC Audit (`pkg/audit`)
 
@@ -510,6 +585,7 @@ The RBAC audit package scans the cluster at startup to identify RBAC exposure ri
 | TokenRequest exposure | Critical | Any Role/ClusterRole granting `create` on `serviceaccounts/token` |
 | Aggregate-to-edit status | Warning | Whether `system:aggregate-to-edit` still includes the `impersonate` verb |
 | Unused permissions | Info | Permissions in the SA's ClusterRole that do not match any API call pattern |
+| Aggregation rules | Warning | Whether the static ClusterRole uses `aggregationRule` (see section 5.4) |
 
 #### 6.2.3 Integration
 
@@ -547,11 +623,13 @@ Pod CREATE/UPDATE received
 Is the pod using a protected ServiceAccount?
     |
     +-- No --> Allow
-    +-- Yes --> Is the request from the operator's own controller?
+    +-- Yes --> Is the requesting user in the allowed-identities list?
                     |
                     +-- Yes --> Allow
                     +-- No --> Deny ("ServiceAccount is protected")
 ```
+
+The allowed-identities list is configured at webhook registration time. It typically includes the operator's own controller ServiceAccount (e.g., `system:serviceaccount:my-namespace:my-operator`) and the platform operator's SA if the operator is managed by one. The webhook matches the `userInfo.username` field from the admission request against this list.
 
 The webhook uses namespace selectors to scope enforcement to the operator's namespace, avoiding cluster-wide webhook overhead.
 
@@ -559,9 +637,15 @@ The webhook uses namespace selectors to scope enforcement to the operator's name
 
 **Name-only SA matching.** The webhook matches ServiceAccount names, not UIDs. This avoids the bootstrapping problem where the webhook needs to know the SA UID before the SA exists. Name-based matching is sufficient because SA names are unique within a namespace.
 
-**Fail-secure.** If the webhook encounters an error evaluating a request, it denies the request. This prevents attackers from exploiting webhook failures to bypass protection.
+**Fail-secure with availability tradeoff.** If the webhook encounters an error evaluating a request, it denies the request (`failurePolicy: Fail`). This prevents attackers from exploiting webhook failures to bypass protection. However, if the webhook pod is down, all pod creation in the scoped namespace is blocked. To mitigate this, deploy the webhook in a separate namespace from the operator it protects, use a PriorityClass to ensure scheduling priority, and configure PodDisruptionBudgets.
 
 **Update short-circuit.** Pod updates that do not change the ServiceAccount field are allowed without further validation. This avoids false positives from kubelet status updates and readiness probes.
+
+#### 6.3.5 Limitations
+
+**Ephemeral containers.** The `pods/ephemeralcontainers` subresource (used by `kubectl debug`) allows attaching a debug container to an existing pod. The debug container inherits the pod's ServiceAccount. This subresource does not trigger the SA protection webhook's Pod CREATE/UPDATE path. Mitigation: restrict `pods/ephemeralcontainers` access in the operator's namespace via RBAC. A VAP template (`restrict-ephemeral-containers-on-protected-pods`) is provided to restrict who can create ephemeral containers on pods using protected ServiceAccounts.
+
+**TokenRequest API.** Any entity with `create` on `serviceaccounts/token` can mint new tokens for any SA, bypassing SA identity protection entirely. The RBAC audit component detects this exposure at startup. Mitigation requires the admin to restrict `serviceaccounts/token` access separately.
 
 ### 6.4 Impersonation Guard (`pkg/impersonation`)
 
@@ -575,39 +659,28 @@ The impersonation guard reconciler:
 
 1. Reads the `system:aggregate-to-edit` ClusterRole.
 2. Strips the `impersonate` verb from ServiceAccount rules.
-3. Sets `rbac.authorization.kubernetes.io/autoupdate: "false"` to prevent the API server from restoring the verb on restart.
+3. Sets `rbac.authorization.kubernetes.io/autoupdate: "false"` to prevent the API server's aggregation controller from restoring the verb.
 4. Reconciles continuously to detect and correct drift.
+
+This component operates in the admin trust domain and requires write access to the `system:aggregate-to-edit` ClusterRole, which is consistent with design principle 2.2 (admin-side components may manage RBAC resources).
 
 #### 6.4.3 Why Webhooks Cannot Solve This
 
-Impersonation is evaluated at the authentication layer, before admission webhooks are invoked. A ValidatingWebhook that denies impersonation requests would never see them because the API server resolves impersonation headers before routing the request to the admission chain.
+Impersonation headers (`Impersonate-User`, `Impersonate-Group`) are resolved during the authentication phase, and the authorization check for the `impersonate` verb happens at the authorization layer. Both occur before the request reaches the admission chain. By the time a ValidatingWebhook sees a Pod CREATE request, the caller's identity has already been swapped to the impersonated identity. The webhook cannot distinguish an impersonated request from a direct one, and cannot block the impersonation itself.
 
-#### 6.4.4 Companion VAP
+#### 6.4.4 Startup Race Window
 
-A ValidatingAdmissionPolicy template is provided to prevent restoration of the `impersonate` verb in `system:aggregate-to-edit`:
+Between the impersonation guard starting and completing its first reconciliation, the `impersonate` verb may be active. This window is typically sub-second but is unbounded if the guard pod is pending (e.g., due to resource pressure). Mitigations:
 
-```yaml
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicy
-metadata:
-  name: deny-impersonate-grants
-spec:
-  matchConstraints:
-    resourceRules:
-      - apiGroups: ["rbac.authorization.k8s.io"]
-        resources: ["clusterroles"]
-        operations: ["UPDATE"]
-  validations:
-    - expression: >-
-        !object.rules.exists(r,
-          r.resources.exists(res, res == 'serviceaccounts') &&
-          r.verbs.exists(v, v == 'impersonate'))
-      message: "ClusterRole must not grant impersonate on serviceaccounts"
-```
+- Deploy the impersonation guard with a high PriorityClass to ensure it schedules before operator workloads.
+- Deploy the companion VAP (deny-impersonate-grants) which blocks attempts to re-add the `impersonate` verb via UPDATE operations. The VAP is effective immediately on deployment, independent of the guard pod.
+- Monitor for the `impersonate` verb via the RBAC audit component and alert if detected.
+
+Note: during Kubernetes version upgrades, the API server's built-in role reconciliation may reset the `autoupdate` annotation. The guard's continuous reconciliation detects and corrects this, but there is a brief window. The companion VAP provides defense-in-depth during this window.
 
 #### 6.4.5 Future: KEP-5284 Constrained Impersonation
 
-KEP-5284 (Constrained Impersonation, alpha in v1.35) restricts impersonation so that "an impersonating user cannot perform actions they themselves are not allowed to do." When this KEP reaches GA, the impersonation guard becomes less critical but remains valuable as a belt-and-suspenders measure.
+[KEP-5284](https://github.com/kubernetes/enhancements/issues/5284) (Constrained Impersonation) restricts impersonation so that "an impersonating user cannot perform actions they themselves are not allowed to do." Target timeline should be verified against the current KEP status. When this KEP reaches GA, the impersonation guard becomes less critical but remains valuable as a belt-and-suspenders measure.
 
 ### 6.5 ValidatingAdmissionPolicy Templates
 
@@ -617,11 +690,16 @@ The toolkit provides VAP templates for cluster admins to deploy. These enforce R
 |----------|---------|-----------------|
 | `deny-impersonate-grants.yaml` | Block impersonation privilege grants in any Role/ClusterRole | Impersonation bypass |
 | `restrict-scoped-rolebinding-creation.yaml` | Only the scoping controller's SA can create managed RoleBindings | Unauthorized RoleBinding creation by compromised operator |
+| `restrict-scoped-rolebinding-mutation.yaml` | Only the scoping controller's SA can update or delete managed RoleBindings | Unauthorized RoleBinding modification or deletion |
 | `restrict-scoped-rolebinding-subjects.yaml` | Managed RoleBindings can only reference the target operator's SA | Subject manipulation to grant access to attacker-controlled SA |
 | `deny-rolebinding-in-protected-namespaces.yaml` | Default deny-list for sensitive namespaces (kube-system, kube-public, etc.) | RoleBinding creation in system namespaces |
 | `allow-rolebinding-in-labeled-namespaces.yaml` | Only admin-labeled namespaces can receive managed RoleBindings | RoleBinding creation in unauthorized namespaces |
 | `protect-rbac-allowed-label.yaml` | Prevents non-admin label manipulation on namespaces | Label spoofing to bypass namespace restrictions |
+| `protect-vap-enforcement-labels.yaml` | Prevents non-admin manipulation of labels used by VAP binding namespaceSelectors | Disabling VAP enforcement by removing enforcement labels |
 | `protect-static-clusterrole.yaml` | Prevents modification of the static ClusterRole | Permission ceiling tampering |
+| `deny-aggregated-static-clusterrole.yaml` | Blocks creation of ClusterRoles with labels matching the static ClusterRole's aggregation selector | Aggregation-based permission injection |
+| `protect-scoper-config.yaml` | Restricts write access to the scoping controller's ConfigMap | Configuration tampering |
+| `restrict-ephemeral-containers-on-protected-pods.yaml` | Restricts who can create ephemeral containers on pods using protected SAs | SA token access via kubectl debug |
 
 VAP templates are provided as YAML files in `config/vap/`. Cluster admins deploy them via Kustomize, Helm, or GitOps. Each template includes inline documentation explaining what it protects and how to configure it.
 
@@ -632,26 +710,31 @@ VAP templates are provided as YAML files in `config/vap/`. Cluster admins deploy
 ### 7.1 Assumptions
 
 1. The Kubernetes API server is trusted and correctly enforces RBAC.
-2. The scoping controller's ServiceAccount is separate from the operator's ServiceAccount.
-3. The static ClusterRole is deployed by the admin and not modifiable by the operator at runtime.
+2. Node-level integrity is assumed. Container escapes to the node filesystem are out of scope (a compromised node can access all projected SA tokens for pods on that node, bypassing all API-level protections). Mitigation: use `automountServiceAccountToken: false` with explicit projected volumes using short-lived, audience-restricted bound tokens.
+3. The static ClusterRole is deployed by the admin, does not use `aggregationRule`, and is protected by the `protect-static-clusterrole` VAP.
 4. VAP templates are deployed by the admin and enforce invariants at the API server level.
+5. **For standalone deployment:** the scoping controller's ServiceAccount is separate from the operator's ServiceAccount. For embedded deployment, see section 7.3.1.
+6. Migration from legacy ClusterRoleBindings is complete (legacy ClusterRoleBindings have been removed). Before migration is complete, the scoping controller provides additive RoleBindings but does not reduce existing cluster-wide access.
 
 ### 7.2 Attack Chain Analysis
 
 | # | Attack Vector | Mitigated By | Residual Risk |
 |---|---------------|-------------|---------------|
-| 1 | **Compromised operator SA token reads secrets in kube-system** | Scoping controller (no RoleBinding in kube-system) | None if scoping controller is deployed |
-| 2 | **Attacker creates pod with operator's SA in operator namespace** | SA protection webhook (denies unauthorized SA usage) | Webhook bypass if webhook is down or misconfigured |
-| 3 | **Namespace editor impersonates operator's SA** | Impersonation guard (strips impersonate from aggregate-to-edit) + deny-impersonate-grants VAP | Race condition during guard startup |
+| 1 | **Compromised operator SA token reads secrets in kube-system** | Scoping controller (no RoleBinding in kube-system) | None if scoping controller is deployed AND legacy ClusterRoleBinding has been removed (see assumption 6) |
+| 2 | **Attacker creates pod with operator's SA in operator namespace** | SA protection webhook (denies unauthorized SA usage) | Webhook unavailability blocks all pod creation in scoped namespace. Deploy webhook in separate namespace with PriorityClass. |
+| 3 | **Namespace editor impersonates operator's SA** | Impersonation guard (strips impersonate from aggregate-to-edit) + deny-impersonate-grants VAP | Brief race window during guard startup or K8s upgrades. VAP provides defense-in-depth during this window. |
 | 4 | **Compromised operator SA creates RoleBinding in kube-system** | deny-rolebinding-in-protected-namespaces VAP + restrict-scoped-rolebinding-creation VAP | None if VAPs are deployed |
-| 5 | **Compromised operator SA modifies static ClusterRole to add rules** | protect-static-clusterrole VAP + operator SA has no write verbs on ClusterRoles | None if VAP is deployed |
-| 6 | **Attacker modifies managed RoleBinding to change subject** | restrict-scoped-rolebinding-subjects VAP + scoping controller drift recovery | None if VAP is deployed |
-| 7 | **Attacker labels namespace to allow RoleBinding creation** | protect-rbac-allowed-label VAP (restricts who can set the label) | Admin compromise |
-| 8 | **Scoping controller SA is compromised** | Controller SA only has bind on specific ClusterRoles (resourceNames). Cannot create arbitrary bindings. VAPs still enforce invariants. | Attacker can create RoleBindings in any namespace for the scoped ClusterRoles |
+| 5 | **Compromised operator SA modifies static ClusterRole to add rules** | protect-static-clusterrole VAP + operator SA has no write verbs on ClusterRoles | None if VAP is deployed. Does not cover aggregation-based injection (see #12). |
+| 6 | **Attacker modifies managed RoleBinding to change subject** | restrict-scoped-rolebinding-subjects VAP + restrict-scoped-rolebinding-mutation VAP + scoping controller drift recovery | None if VAPs are deployed |
+| 7 | **Attacker labels namespace to allow RoleBinding creation** | protect-rbac-allowed-label VAP + protect-vap-enforcement-labels VAP | Admin compromise |
+| 8 | **Scoping controller SA is compromised (standalone)** | Controller SA only has bind on specific ClusterRoles (resourceNames). Cannot create arbitrary bindings. VAPs still enforce invariants. | Attacker can create RoleBindings in any namespace for the scoped ClusterRoles |
 | 9 | **TokenRequest API used to mint SA token** | RBAC audit detects tokenrequest exposure at startup | Requires separate RBAC restriction on serviceaccounts/token |
 | 10 | **Operator continues using existing broad ClusterRoleBinding** | Migration guide, RBAC audit warns about ClusterRoleBindings | Requires admin action to remove legacy bindings |
+| 11 | **Attacker sets CR field to target kube-system via TargetNamespaceSource** | Controller-side deny-list + NamespaceSelector validation + deny-rolebinding-in-protected-namespaces VAP | None if controller validation and VAP are both deployed |
+| 12 | **Attacker injects rules into static ClusterRole via aggregation** | Static ClusterRole MUST NOT use aggregationRule (validated at startup) + deny-aggregated-static-clusterrole VAP | None if requirement is followed and VAP is deployed |
+| 13 | **Attacker uses kubectl debug to access operator SA token** | restrict-ephemeral-containers-on-protected-pods VAP | None if VAP is deployed |
 
-### 7.3 Trust Boundaries
+### 7.3 Trust Boundaries (Standalone Deployment)
 
 ```
 +------------------------------------------+
@@ -677,16 +760,44 @@ VAP templates are provided as YAML files in `config/vap/`. Cluster admins deploy
 A compromise in the operator trust domain cannot escalate into the admin trust domain because:
 - The operator SA has no RBAC write verbs.
 - The operator SA cannot modify the static ClusterRole (VAP enforced).
-- The operator SA cannot create RoleBindings (VAP enforced).
+- The operator SA cannot create or delete RoleBindings (VAP enforced).
 - The operator SA cannot modify the scoping controller's SA permissions.
+
+#### 7.3.1 Trust Boundaries (Embedded Deployment)
+
+When the scoping controller is embedded in a platform operator, the trust boundary is collapsed:
+
+```
++------------------------------------------+
+|   Platform Operator Trust Domain          |
+|   (combines admin and operator concerns)  |
+|                                          |
+|  - Platform SA (shared)                  |
+|  - Scoping logic (bind verb)             |
+|  - Application logic                     |
++------------------------------------------+
+```
+
+In this mode, compromising the platform operator SA grants the attacker both operator capabilities AND the `bind` verb for scoped ClusterRoles. The attacker can create RoleBindings in any namespace (bounded by namespace selector and VAPs).
+
+**What is preserved in embedded mode:**
+- VAP enforcement still holds (API-server-level, independent of SA compromise).
+- The static ClusterRole ceiling still holds.
+- The operator SA has no `escalate` verb, so it cannot create Roles with arbitrary rules.
+
+**What is lost in embedded mode:**
+- Trust domain separation. A single SA compromise grants both operator and RBAC management capabilities.
+- Attack chain #8 applies to the combined SA, increasing the blast radius of a compromise.
+
+**Recommendation:** Use embedded mode when the platform operator is already highly privileged (e.g., RHOAI operator with cluster-admin-like permissions) and adding the scoping logic does not meaningfully increase its blast radius. Use standalone mode for operators where trust domain separation is a compliance requirement.
 
 ### 7.4 Blast Radius Quantification
 
 Blast radius is measured by counting accessible resources before and after scoping:
 
 **Measurement methodology:**
-1. Mint a token for the operator's SA.
-2. Attempt to list secrets in every namespace.
+1. Mint a token for the operator's SA using `kubectl create token <sa-name> -n <namespace>`.
+2. Attempt to list secrets in every namespace using `kubectl get secrets --all-namespaces --token=<token>`.
 3. Count the namespaces where the request succeeds and the total secrets accessible.
 
 **Example measurement (RHOAI Dashboard):**
@@ -696,7 +807,7 @@ Blast radius is measured by counting accessible resources before and after scopi
 | ClusterRoleBinding (before) | All namespaces (including kube-system) | 43 in kube-system + all others |
 | Namespace-scoped RoleBindings (after) | Only namespaces with active CRs | 5 in the CR namespace |
 
-The reduction is not a percentage (which varies by cluster size) but an absolute confinement: access exists only where CRs exist.
+The reduction is not a percentage (which varies by cluster size) but an absolute confinement: access exists only where CRs exist. Kubernetes evaluates RBAC against current bindings on every API request, so removing the ClusterRoleBinding and adding namespace-scoped RoleBindings takes effect immediately for all existing tokens. No token rotation is required.
 
 ---
 
@@ -707,19 +818,20 @@ The reduction is not a percentage (which varies by cluster size) but an absolute
 | Concern | Separate Controller (standalone binary) | Embedded Library (imported by platform operator) |
 |---------|----------------------------------------|--------------------------------------------------|
 | Deployment friction | Additional Deployment to install | Zero additional friction (code import) |
-| Trust domain | Clear separation (separate SA) | Shared with platform operator's SA |
+| Trust domain | Full separation (separate SA) | Collapsed (shared with platform operator's SA, see 7.3.1) |
 | Upgrade path | Independent release cycle | Coupled to platform operator releases |
-| Best for | Clusters without an existing platform operator | Clusters with an existing platform operator (e.g., RHOAI) |
+| HA | Leader election with 2 replicas | Inherits host operator's HA |
+| Best for | Compliance-sensitive, multi-tenant, or untrusted operator environments | Clusters with an existing platform operator (e.g., RHOAI) where the platform operator is already highly privileged |
 
-Both options use the same `pkg/scoper` library. The tradeoff is deployment model, not implementation.
+Both options use the same `pkg/scoper` library. The tradeoff is deployment model and security posture, not implementation.
 
 ### 8.2 Annotation-Based vs. Finalizer-Based Cross-Namespace GC
 
 | Concern | Annotations | Finalizers |
 |---------|-------------|------------|
 | Deletion latency | Requires periodic scan | Immediate on CR deletion |
-| Failure mode | Orphan persists until next scan | Stuck CR if controller is down |
-| Operational risk | Low (orphan = extra RoleBinding) | High (stuck finalizer blocks namespace deletion) |
+| Failure mode | Orphan persists until next scan (over-grant) | Stuck CR if controller is down (blocks namespace deletion) |
+| Operational risk | Low (temporary over-grant) | High (stuck finalizer blocks namespace deletion) |
 
 Annotations are chosen because stuck finalizers are operationally worse than temporary orphans. An orphan RoleBinding grants access that should be revoked; a stuck finalizer blocks namespace deletion and can cascade into cluster-wide issues.
 
@@ -730,6 +842,7 @@ Annotations are chosen because stuck finalizers are operationally worse than tem
 | Bootstrapping | No bootstrapping problem | Controller needs CRD to exist before it can start |
 | Validation | Startup validation only | Webhook validation on create/update |
 | Schema evolution | Unversioned | Versioned with conversion webhooks |
+| Integrity protection | VAP template provided | Standard RBAC on CRD resources |
 | Simplicity | Simple to deploy and manage | Additional complexity (CRD, webhook, RBAC for the CRD) |
 
 ConfigMap is chosen for simplicity. The scoping controller is a low-churn component; its configuration rarely changes after initial setup. If schema evolution becomes important, a CRD can be added in a future version without breaking the ConfigMap path.
@@ -747,27 +860,73 @@ SSAR is used for graceful degradation checks (specific operations). SSRR could b
 
 ---
 
-## 9. Performance Characteristics
+## 9. Observability
 
-### 9.1 Graceful Degradation Library
+### 9.1 Scoping Controller Metrics
+
+The scoping controller exports Prometheus metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rbac_scoper_rolebinding_created_total` | Counter | Total RoleBindings created, labeled by target SA and namespace |
+| `rbac_scoper_rolebinding_deleted_total` | Counter | Total RoleBindings deleted (GC), labeled by target SA and namespace |
+| `rbac_scoper_reconcile_duration_seconds` | Histogram | Reconciliation latency |
+| `rbac_scoper_reconcile_errors_total` | Counter | Reconciliation errors, labeled by error type |
+| `rbac_scoper_orphan_rolebindings` | Gauge | Current count of orphan RoleBindings pending cleanup |
+| `rbac_scoper_clusterrole_missing` | Gauge | Whether a configured static ClusterRole is missing (0 = present, 1 = missing) |
+
+### 9.2 Graceful Degradation Library Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `graceful_permission_denied_total` | Counter | Total Forbidden errors handled, labeled by resource and verb |
+| `graceful_permission_restored_total` | Counter | Total permission restorations detected |
+| `graceful_ssar_duration_seconds` | Histogram | SelfSubjectAccessReview call latency |
+| `graceful_ssar_calls_total` | Counter | Total SSAR calls |
+
+### 9.3 Recommended Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| `RBACScoperReconcileErrors` | `rbac_scoper_reconcile_errors_total` increasing for 10m | Warning |
+| `RBACScoperClusterRoleMissing` | `rbac_scoper_clusterrole_missing == 1` for 5m | Critical |
+| `RBACScoperOrphanAccumulation` | `rbac_scoper_orphan_rolebindings > 10` for 15m | Warning |
+| `OperatorPermissionDenied` | `graceful_permission_denied_total` increasing for 5m | Warning |
+| `ImpersonateVerbDetected` | RBAC audit finding with category `aggregate-to-edit-impersonate` | Critical |
+
+### 9.4 Structured Logging
+
+All components use structured logging (JSON format) with consistent fields:
+
+- `component`: which toolkit component emitted the log (scoper, graceful, audit, saprotection, impersonation)
+- `target_sa`: the ServiceAccount being scoped or protected
+- `namespace`: the namespace where the action occurred
+- `rolebinding`: the managed RoleBinding name (scoper logs)
+- `permission`: the specific permission being checked or denied (graceful logs)
+
+---
+
+## 10. Performance Characteristics
+
+### 10.1 Graceful Degradation Library
 
 The library adds negligible overhead to reconciliation:
 
 | Operation | Cost | When |
 |-----------|------|------|
-| `SelfSubjectAccessReview` | 1 API call per check | Startup discovery, after Forbidden errors |
+| `SelfSubjectAccessReview` | 1 API call per check (rate-limited, default 10 concurrent) | Startup discovery, after Forbidden errors |
 | Status condition update | 1 API call (patch) | When permission state changes |
 | Event emission | 1 API call | When permission state changes |
 | Forbidden handling | 0 additional API calls | Intercepts existing error, no new calls |
 
 At steady state (permissions unchanged), the library adds zero API calls. Cost is incurred only on permission state transitions.
 
-### 9.2 RBAC Scoping Controller
+### 10.2 RBAC Scoping Controller
 
 | Operation | Cost | When |
 |-----------|------|------|
 | RoleBinding creation | 1 API call | First CR in a new namespace |
-| OwnerReference update | 1 API call | Additional CR in existing namespace |
+| OwnerReference patch | 1 API call | Additional CR in existing namespace |
 | Steady-state reconcile | 0 API calls | DeepEqual skip when no changes |
 | Orphan scan | 1 list + N get calls | Startup + periodic interval |
 
@@ -775,17 +934,43 @@ Performance characteristics are inherited from operator-security-runtime v1, whi
 
 - p95 reconcile latency: +13-18% (~123ms absolute, one-time per namespace)
 - Steady-state cost: 0 additional API calls
-- First-time provisioning: 2 API calls (1 RoleBinding create + 1 OwnerReference update) per namespace
+- First-time provisioning: 2 API calls (1 RoleBinding create + 1 OwnerReference patch) per namespace
 
-### 9.3 Defense-in-Depth Components
+### 10.3 Defense-in-Depth Components
 
 SA protection webhook and impersonation guard have the same performance characteristics as in v1. The webhook adds ~2ms to pod admission decisions. The impersonation guard reconciler runs once and watches for drift.
 
 ---
 
-## 10. Migration from operator-security-runtime v1
+## 11. Kubernetes Version Compatibility
 
-### 10.1 Component Mapping
+| Component | Minimum K8s Version | Notes |
+|-----------|--------------------|----- |
+| Graceful Degradation Library | 1.25+ | Uses SelfSubjectAccessReview (stable since 1.0) |
+| RBAC Scoping Controller | 1.25+ | Uses standard RBAC resources and controller-runtime |
+| SA Protection Webhook | 1.25+ | ValidatingWebhookConfiguration (stable since 1.16) |
+| Impersonation Guard | 1.25+ | Modifies standard ClusterRole resources |
+| RBAC Audit | 1.25+ | Reads standard RBAC resources |
+| VAP Templates | 1.30+ | ValidatingAdmissionPolicy GA in 1.30 |
+| KEP-4601 (Authorization with Selectors) | 1.31+ (alpha) | Future direction, not current dependency |
+
+**OpenShift version mapping:**
+
+| OpenShift | Kubernetes | VAP Support |
+|-----------|-----------|-------------|
+| 4.14 | 1.27 | No |
+| 4.15 | 1.28 | No |
+| 4.16 | 1.29 | No |
+| 4.17 | 1.30 | Yes (GA) |
+| 4.18+ | 1.31+ | Yes |
+
+On clusters without VAP support, deploy the core components (scoping controller, graceful degradation library, SA protection webhook, impersonation guard) and use the RBAC audit component to identify remaining exposure. The VAP templates provide defense-in-depth but are not required for the core scoping functionality.
+
+---
+
+## 12. Migration from operator-security-runtime v1
+
+### 12.1 Component Mapping
 
 | v1 Package | v2 Component | Migration |
 |------------|-------------|-----------|
@@ -796,47 +981,46 @@ SA protection webhook and impersonation guard have the same performance characte
 | `pkg/rbacaudit` | `pkg/audit` | No change; integrate as before |
 | N/A | `pkg/graceful` | New component; add to operator reconciler |
 
-### 10.2 Migration Steps
+### 12.2 Migration Steps
 
 1. **Add graceful degradation library** to the operator. Replace hard failures on Forbidden with graceful degradation via `pkg/graceful`.
 2. **Deploy the scoping controller** (or embed `pkg/scoper` in the platform operator). Configure it with the operator's SA and CR GVK.
-3. **Deploy the static ClusterRole** with the scoped permissions (same rules the operator previously managed via escalate mode).
-4. **Remove RBAC management code** from the operator's reconciler. Remove the `escalate`/`bind` verb requirements.
-5. **Remove the scoped resources** from the operator's static ClusterRole. The scoping controller now manages per-namespace access.
-6. **Verify** by minting a token for the operator's SA and confirming it cannot access resources outside CR-bearing namespaces.
+3. **Deploy the static ClusterRole** with the scoped permissions (same rules the operator previously managed via escalate mode). Ensure it does not use `aggregationRule`.
+4. **Remove RBAC management code** from the operator's reconciler. Remove the `escalate`/`bind` verb requirements from the operator's RBAC markers.
+5. **Remove the scoped resources** from the operator's static ClusterRole and remove the legacy ClusterRoleBinding. The scoping controller now manages per-namespace access.
+6. **Verify** by minting a token for the operator's SA and confirming it cannot access resources outside CR-bearing namespaces: `kubectl create token <sa> -n <ns> | kubectl get secrets -A --token=-`
 
-### 10.3 Rollback Safety
+### 12.3 Rollback Safety
 
 Each migration step is independently reversible:
 
 - Step 1 is additive (new library, no behavior change if permissions are available).
 - Step 2 creates RoleBindings that coexist with any existing ClusterRoleBinding.
-- Steps 3-5 can be reverted by re-adding the scoped resources to the operator's static ClusterRole.
+- Steps 3-5 can be reverted by re-adding the scoped resources to the operator's static ClusterRole and re-creating the ClusterRoleBinding.
 
 ---
 
-## 11. Known Limitations
+## 13. Known Limitations
 
-### 11.1 Scoping Controller Availability
+### 13.1 Scoping Controller Availability
 
 If the scoping controller is down when a CR is created, the RoleBinding is not created until the controller recovers. During this window, the operator cannot access resources in the new namespace. The graceful degradation library handles this by surfacing status conditions and retrying.
 
-### 11.2 Cross-Namespace Orphan Latency
+### 13.2 Cross-Namespace Orphan Latency
 
-Cross-namespace RoleBindings use annotation-based ownership with periodic cleanup. If a CR is deleted while the controller is down, the orphan RoleBinding persists until the next cleanup scan. This is a temporary over-grant (access persists longer than needed) rather than an under-grant (access denied when needed).
+Cross-namespace RoleBindings use annotation-based ownership with periodic cleanup. If a CR is deleted while the controller is down, the orphan RoleBinding persists until the next cleanup scan (default: 5 minutes). This is a temporary over-grant (access persists longer than needed) rather than an under-grant (access denied when needed). The graceful degradation library does not detect over-grants; it only surfaces under-grants (missing permissions).
 
-### 11.3 Existing Tokens
+### 13.3 Backup and Restore
 
-Scoping permissions does not invalidate existing ServiceAccount tokens. If a token was minted before scoping was applied, it retains the permissions it had at minting time until it expires. This is a Kubernetes limitation, not a toolkit limitation.
+After a cluster restore from backup (e.g., Velero), CRs may exist with different UIDs than when the backup was taken. Cross-namespace RoleBinding annotations reference CRs by `namespace/name/uid`. If the UID has changed, the annotation entry looks like an orphan. The scoping controller's orphan scan will remove the stale entry and re-create it with the correct UID on the next reconciliation cycle. There is a brief window (one reconciliation cycle) where the RoleBinding may be temporarily deleted and recreated.
 
-### 11.4 TokenRequest API
+### 13.4 VAP Self-Protection
 
-The Kubernetes TokenRequest API allows any entity with `create` on `serviceaccounts/token` to mint new tokens for any SA. This bypasses SA identity protection. The RBAC audit component detects this exposure, but mitigation requires the admin to restrict `serviceaccounts/token` access separately.
+ValidatingAdmissionPolicies cannot intercept operations on VAP resources themselves. A compromised SA with permissions to modify VAPs could disable the protection policies. Additionally, if a VAP binding uses `namespaceSelector` for enforcement, an attacker who can modify namespace labels could remove the enforcement label, disabling the VAP for that namespace without touching the VAP or its binding. Mitigations:
+- Ensure no operator SA has write access to `validatingadmissionpolicies` or `validatingadmissionpolicybindings`.
+- Deploy the `protect-vap-enforcement-labels` VAP to protect labels used by VAP binding namespaceSelectors.
+- Use `matchPolicy: Exact` on VAP bindings where possible rather than label selectors.
 
-### 11.5 Webhook Ordering
+### 13.5 CRD Not Yet Installed
 
-If multiple mutating admission webhooks run before the SA protection webhook, a mutating webhook could change the ServiceAccount of a pod after the SA protection webhook has validated it. This is a standard Kubernetes webhook ordering limitation. Mitigation: ensure the SA protection webhook runs last in the admission chain, or use a `reinvocationPolicy: IfNeeded` configuration.
-
-### 11.6 VAP Self-Protection Limitation
-
-ValidatingAdmissionPolicies cannot intercept operations on VAP resources themselves. This means a compromised SA with permissions to modify VAPs could disable the protection policies. This is a Kubernetes API limitation. Mitigation: ensure no operator SA has write access to `validatingadmissionpolicies` or `validatingadmissionpolicybindings`.
+If the scoping controller starts before the CRD for a configured GVK is installed, the controller retries CRD discovery with exponential backoff. RoleBindings for that target are not created until the CRD becomes available. The controller continues to process other configured targets while waiting.
