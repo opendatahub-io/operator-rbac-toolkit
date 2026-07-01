@@ -429,7 +429,7 @@ For cross-namespace RoleBindings, OwnerReferences cannot be used (Kubernetes doe
 
 - Annotation key: `operator-rbac-toolkit.io/scoped-access-owners`
 - Annotation value: comma-separated list of `namespace/name/uid` entries
-- Maximum annotation size: 256KB (Kubernetes limit). At ~60 bytes per entry, this supports ~4000 owner entries, which is well beyond any realistic scenario.
+- Kubernetes limits the total size of all annotations on an object to 256KB. The ownership annotation shares this budget with other annotations (e.g., `last-applied-configuration`, controller-runtime annotations). At ~60 bytes per entry and assuming a few KB of other annotations, this practically supports thousands of owner entries, well beyond any realistic scenario.
 - Concurrent updates: handled via optimistic concurrency with retry-on-conflict (standard controller-runtime pattern).
 - Malformed entries: skipped during parsing, not fatal. A warning is logged for each skipped entry.
 
@@ -482,6 +482,7 @@ The scoping controller's ServiceAccount needs:
 | `get`, `create`, `update`, `patch`, `delete` on `rolebindings` | Managing namespace-scoped RoleBindings (patch for OwnerReference updates) |
 | `bind` on the static ClusterRole (via `resourceNames`) | Creating RoleBindings that reference the static ClusterRole |
 | `get` on `clusterroles` (via `resourceNames`) | Startup validation of static ClusterRole (no aggregationRule) |
+| `get`, `list`, `watch` on `namespaces` | Namespace label watching (required when `NamespaceSelector` is configured) |
 
 The `bind` verb is scoped to specific ClusterRole names via `resourceNames`, preventing the controller from binding arbitrary ClusterRoles.
 
@@ -508,7 +509,7 @@ For cross-namespace RoleBindings (where the RoleBinding is in a different namesp
 
 1. Lists all managed RoleBindings (identified by the deterministic name).
 2. For each RoleBinding, parses the owner annotations.
-3. For each owner entry, checks if the referenced CR still exists **and** if the CR's GVK matches a configured scoping target. An annotation referencing a CR whose GVK is not in the scoping target configuration is treated as stale and removed.
+3. For each owner entry, checks if the referenced CR still exists, if the CR's GVK matches a configured scoping target, and (for `TargetNamespaceSource` targets) if the CR's target namespace field still resolves to the namespace where this RoleBinding exists. An entry is treated as stale and removed if the CR no longer exists, if the GVK does not match any configured target, or if the CR's target namespace field has changed to point elsewhere.
 4. Removes stale owner entries.
 5. If no owners remain, deletes the RoleBinding.
 
@@ -635,7 +636,9 @@ Is the pod using a protected ServiceAccount?
                     +-- No --> Deny ("ServiceAccount is protected")
 ```
 
-The allowed-identities list is configured at webhook registration time. It typically includes the operator's own controller ServiceAccount (e.g., `system:serviceaccount:my-namespace:my-operator`) and the platform operator's SA if the operator is managed by one. The webhook matches the `userInfo.username` field from the admission request against this list.
+The allowed-identities list is configured at webhook registration time. It must include both the operator's own controller ServiceAccount and the Kubernetes system controllers that create Pods on the operator's behalf (e.g., `system:serviceaccount:kube-system:replicaset-controller` for Deployments, `system:serviceaccount:kube-system:job-controller` for Jobs). The webhook matches the `userInfo.username` field from the admission request against this list.
+
+**System controller tradeoff:** Including system controllers in the allowed-identities list means any Deployment or Job in the operator's namespace can reference the protected SA. The webhook prevents direct Pod creation with the SA but does not prevent indirect creation via higher-level controllers. Compensating control: restrict `create` on Deployments, StatefulSets, and Jobs in the operator's namespace to authorized principals only.
 
 The webhook uses namespace selectors to scope enforcement to the operator's namespace, avoiding cluster-wide webhook overhead.
 
@@ -663,7 +666,7 @@ A reconciler that closes the impersonation bypass in Kubernetes RBAC. The defaul
 
 `system:aggregate-to-edit` is an aggregated ClusterRole. Its `rules` field is computed by the Kubernetes aggregation controller from component ClusterRoles matching the `rbac.authorization.kubernetes.io/aggregate-to-edit: "true"` label selector. The `impersonate` verb comes from one of these component ClusterRoles.
 
-The impersonation guard takes a two-pronged approach:
+The impersonation guard takes a three-part approach:
 
 1. **Component ClusterRole modification.** Identifies the component ClusterRole that contributes the `impersonate` verb for ServiceAccounts (the one with the `aggregate-to-edit` label) and removes the `impersonate` verb from it. This causes the aggregation controller to recompute `system:aggregate-to-edit` without the verb.
 2. **Autoupdate annotation.** Sets `rbac.authorization.kubernetes.io/autoupdate: "false"` on the component ClusterRole to prevent the RBAC bootstrap reconciliation controller (which runs on API server startup) from resetting it to defaults.
