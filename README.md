@@ -337,7 +337,7 @@ For step-by-step migration instructions and rollback safety, see [TECHNICAL_DESI
 ## Documentation
 
 - **[Technical Design](docs/TECHNICAL_DESIGN.md)**: Full architecture, threat model, design decisions, known limitations.
-- **Integration Guide** (planned): Step-by-step integration for operator authors and cluster admins.
+- **[Integration Guide](docs/INTEGRATION_GUIDE.md)**: Step-by-step integration for operator authors and cluster admins.
 
 ## License
 
