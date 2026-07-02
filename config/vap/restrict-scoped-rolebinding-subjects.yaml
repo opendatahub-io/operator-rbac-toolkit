@@ -1,0 +1,63 @@
+# restrict-scoped-rolebinding-subjects.yaml
+#
+# PURPOSE: Ensures that managed RoleBindings (those with the
+# operator-rbac-toolkit.io/scoped-access-owners annotation) can only reference
+# a specific target operator's ServiceAccount as their subject. This prevents
+# subject manipulation attacks where an attacker modifies a managed RoleBinding
+# to grant access to an attacker-controlled ServiceAccount instead of the
+# intended operator SA.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_SUBJECT_NAMESPACE with the namespace of the target
+#     operator's ServiceAccount (e.g., "my-operator-system").
+#   - Replace REPLACE_ME_SUBJECT_SA_NAME with the ServiceAccount name of the
+#     target operator (e.g., "my-operator-controller-manager").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-scoped-rolebinding-subjects
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-subjects"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+  # Only evaluate RoleBindings that carry the managed annotation.
+  # Non-managed RoleBindings are not subject to this restriction.
+  matchConditions:
+    - name: has-managed-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
+  validations:
+    # Every subject in the RoleBinding must be a ServiceAccount, and each must
+    # match the expected namespace and name. This prevents binding to Users,
+    # Groups, or arbitrary ServiceAccounts.
+    - expression: >-
+        object.subjects.all(s,
+          s.kind == "ServiceAccount" &&
+          s.namespace == "REPLACE_ME_SUBJECT_NAMESPACE" &&
+          s.name == "REPLACE_ME_SUBJECT_SA_NAME"
+        )
+      message: >-
+        All subjects in a managed RoleBinding must be ServiceAccounts matching
+        the expected target operator SA (namespace: REPLACE_ME_SUBJECT_NAMESPACE,
+        name: REPLACE_ME_SUBJECT_SA_NAME). Non-ServiceAccount subject kinds
+        (User, Group) and other ServiceAccounts are not allowed.
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-scoped-rolebinding-subjects
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-subjects"
+spec:
+  policyName: restrict-scoped-rolebinding-subjects
+  validationActions: [Deny]

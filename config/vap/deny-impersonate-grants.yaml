@@ -1,0 +1,66 @@
+# deny-impersonate-grants.yaml
+#
+# PURPOSE: Blocks any Role or ClusterRole from granting the "impersonate" verb
+# on any resource. Impersonation allows a principal to act as another user,
+# group, or ServiceAccount, which is a high-privilege escalation path. Cluster
+# admins should deploy this policy to ensure no operator-created role can grant
+# impersonation capabilities.
+#
+# CUSTOMIZATION: No REPLACE_ME placeholders are needed by default. This policy
+# applies globally to all Role and ClusterRole resources. If you have
+# legitimate impersonation use cases (e.g., aggregated API servers), add
+# exclusions to the binding's matchResources or use a matchCondition to skip
+# specific role names.
+#
+# NOTE: This policy does not block wildcard verbs ("*") on non-impersonation
+# resources. It only denies rules that explicitly grant "impersonate", or rules
+# that combine a wildcard verb ("*") with impersonation-relevant resources
+# (users, groups, serviceaccounts, userextras, uids).
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deny-impersonate-grants
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-impersonate-grants"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["roles", "clusterroles"]
+  validations:
+    # Check every rule in the role. No rule may explicitly grant the
+    # "impersonate" verb. Also deny rules that use a wildcard verb ("*")
+    # combined with impersonation-relevant resources (users, groups,
+    # serviceaccounts, userextras, uids). A wildcard verb on unrelated
+    # resources (e.g., pods, configmaps) is not blocked by this policy.
+    - expression: >-
+        object.rules.all(rule,
+          !rule.verbs.exists(v, v == "impersonate") &&
+          !(rule.verbs.exists(v, v == "*") &&
+            rule.resources.exists(r, r in [
+              "users", "groups", "serviceaccounts",
+              "userextras", "uids", "*"
+            ]))
+        )
+      message: >-
+        Granting the "impersonate" verb is not allowed. Impersonation is a
+        high-privilege capability that must not be granted through
+        operator-managed roles. Remove any rules containing the
+        "impersonate" verb, or wildcard verbs targeting impersonation
+        resources (users, groups, serviceaccounts).
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-impersonate-grants
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-impersonate-grants"
+spec:
+  policyName: deny-impersonate-grants
+  validationActions: [Deny]

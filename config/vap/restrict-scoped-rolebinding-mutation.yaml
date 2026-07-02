@@ -1,0 +1,64 @@
+# restrict-scoped-rolebinding-mutation.yaml
+#
+# PURPOSE: Ensures that only the scoping controller's ServiceAccount can UPDATE
+# or DELETE RoleBindings that carry the managed annotation
+# (operator-rbac-toolkit.io/scoped-access-owners). This prevents unauthorized
+# modification or deletion of scoped RoleBindings, even if an attacker has
+# broad RBAC write access. On DELETE, the API server may send an empty object,
+# so the matchCondition checks oldObject as well.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_NAMESPACE with the namespace where the scoping
+#     controller runs (e.g., "operator-rbac-toolkit-system").
+#   - Replace REPLACE_ME_SA_NAME with the ServiceAccount name of the scoping
+#     controller (e.g., "scoper-controller-manager").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-scoped-rolebinding-mutation
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-mutation"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["rolebindings"]
+  # For UPDATE: check the annotation on object (the new version).
+  # For DELETE: the object being deleted may be empty in the admission request,
+  # so check oldObject which holds the existing state of the resource.
+  matchConditions:
+    - name: is-managed-rolebinding
+      expression: >-
+        (has(object.metadata.annotations) &&
+         'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations) ||
+        (has(oldObject.metadata.annotations) &&
+         'operator-rbac-toolkit.io/scoped-access-owners' in oldObject.metadata.annotations)
+  validations:
+    # The requesting user must be the scoping controller's ServiceAccount.
+    # Any other principal attempting to modify or remove a managed RoleBinding
+    # is denied.
+    - expression: >-
+        request.userInfo.username ==
+        "system:serviceaccount:REPLACE_ME_NAMESPACE:REPLACE_ME_SA_NAME"
+      messageExpression: >-
+        "Only the scoping controller ServiceAccount " +
+        "'system:serviceaccount:REPLACE_ME_NAMESPACE:REPLACE_ME_SA_NAME' " +
+        "can update or delete managed RoleBindings (those with the " +
+        "operator-rbac-toolkit.io/scoped-access-owners annotation). " +
+        "Requesting user: " + request.userInfo.username
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-scoped-rolebinding-mutation
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-mutation"
+spec:
+  policyName: restrict-scoped-rolebinding-mutation
+  validationActions: [Deny]

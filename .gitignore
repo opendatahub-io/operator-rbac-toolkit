@@ -1,0 +1,10 @@
+# Binaries
+/scoper
+*.exe
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store

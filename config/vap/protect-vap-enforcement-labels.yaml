@@ -1,0 +1,68 @@
+# protect-vap-enforcement-labels.yaml
+#
+# PURPOSE: Prevents unauthorized manipulation of labels that VAP binding
+# namespaceSelectors rely on for policy enforcement. If an attacker can flip
+# these labels on a namespace, they can move that namespace in or out of a
+# policy's scope, effectively bypassing admission controls.
+#
+# The admin configures which label key to protect. Only the designated admin
+# ServiceAccount is allowed to add, modify, or remove the protected label.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_LABEL_KEY with the label key your VAP bindings use
+#     for namespace selection (e.g., "operator-rbac-toolkit.io/enforce-rbac").
+#   - Replace REPLACE_ME_ADMIN_SA with the full ServiceAccount username
+#     allowed to manage this label (format:
+#     "system:serviceaccount:<namespace>:<name>").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-vap-enforcement-labels
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-vap-enforcement-labels"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["namespaces"]
+  # Only evaluate when the protected label changed between old and new object.
+  # Covers label addition, removal, and value modification.
+  matchConditions:
+    - name: protected-label-changed
+      expression: >-
+        (has(object.metadata.labels) &&
+         'REPLACE_ME_LABEL_KEY' in object.metadata.labels &&
+         !(has(oldObject.metadata.labels) &&
+           'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
+           oldObject.metadata.labels['REPLACE_ME_LABEL_KEY'] ==
+           object.metadata.labels['REPLACE_ME_LABEL_KEY']))
+        ||
+        (has(oldObject.metadata.labels) &&
+         'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
+         !(has(object.metadata.labels) &&
+           'REPLACE_ME_LABEL_KEY' in object.metadata.labels))
+  validations:
+    # Only the designated admin ServiceAccount can modify the protected label.
+    - expression: >-
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA"
+      messageExpression: >-
+        "Only the designated admin ServiceAccount can modify the " +
+        "'REPLACE_ME_LABEL_KEY' label on namespaces. This label controls " +
+        "VAP policy enforcement scope. Requesting user '" +
+        request.userInfo.username + "' is not authorized."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-vap-enforcement-labels
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-vap-enforcement-labels"
+spec:
+  policyName: protect-vap-enforcement-labels
+  validationActions: [Deny]

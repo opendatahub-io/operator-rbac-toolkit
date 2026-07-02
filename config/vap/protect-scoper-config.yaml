@@ -1,0 +1,71 @@
+# protect-scoper-config.yaml
+#
+# PURPOSE: Restricts write access to the scoping controller's ConfigMap. This
+# ConfigMap contains the configuration that drives RBAC scoping decisions. If
+# an attacker can modify it, they can alter which namespaces the controller
+# scopes RBAC into, or change the ClusterRole references, effectively
+# escalating privileges.
+#
+# Only the designated admin ServiceAccount and the scoping controller's own
+# ServiceAccount are allowed to update or delete this ConfigMap.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_CONFIGMAP_NAME with the name of the scoper's ConfigMap
+#     (e.g., "scoper-config").
+#   - Replace REPLACE_ME_NAMESPACE with the namespace where the ConfigMap lives
+#     (e.g., "operator-rbac-toolkit-system").
+#   - Replace REPLACE_ME_ADMIN_SA with the full admin ServiceAccount username
+#     (format: "system:serviceaccount:<namespace>:<name>").
+#   - Replace REPLACE_ME_SCOPER_SA with the full scoper controller
+#     ServiceAccount username (format:
+#     "system:serviceaccount:<namespace>:<name>").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-scoper-config
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-scoper-config"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["configmaps"]
+  # Only evaluate when the ConfigMap matches the protected name and namespace.
+  # For DELETE, the object body may not be fully populated, so check oldObject.
+  matchConditions:
+    - name: is-protected-configmap
+      expression: >-
+        (request.operation != "DELETE" &&
+         object.metadata.name == 'REPLACE_ME_CONFIGMAP_NAME' &&
+         object.metadata.namespace == 'REPLACE_ME_NAMESPACE')
+        ||
+        (request.operation == "DELETE" &&
+         oldObject.metadata.name == 'REPLACE_ME_CONFIGMAP_NAME' &&
+         oldObject.metadata.namespace == 'REPLACE_ME_NAMESPACE')
+  validations:
+    # Only the admin SA or the scoper controller SA can update or delete this
+    # ConfigMap. All other principals are denied.
+    - expression: >-
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA" ||
+        request.userInfo.username == "REPLACE_ME_SCOPER_SA"
+      messageExpression: >-
+        "The ConfigMap 'REPLACE_ME_CONFIGMAP_NAME' in namespace " +
+        "'REPLACE_ME_NAMESPACE' is protected. Only the admin ServiceAccount " +
+        "or the scoper controller ServiceAccount can modify or delete it. " +
+        "Requesting user '" + request.userInfo.username + "' is not authorized."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-scoper-config
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-scoper-config"
+spec:
+  policyName: protect-scoper-config
+  validationActions: [Deny]

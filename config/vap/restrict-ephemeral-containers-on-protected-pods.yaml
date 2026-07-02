@@ -1,0 +1,61 @@
+# restrict-ephemeral-containers-on-protected-pods.yaml
+#
+# PURPOSE: Restricts who can inject ephemeral (debug) containers into pods that
+# run under protected ServiceAccounts. Ephemeral containers share the pod's
+# network namespace, volumes, and (critically) the ServiceAccount token. An
+# attacker with kubectl debug access could attach to an operator pod and steal
+# its token, gaining the operator's RBAC permissions.
+#
+# Only the designated admin ServiceAccount is allowed to add ephemeral
+# containers to pods running with a protected SA.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_PROTECTED_SA with the ServiceAccount name used by the
+#     protected pods (e.g., "my-operator-controller-manager"). This is the
+#     short name, not the full system:serviceaccount:... format.
+#   - Replace REPLACE_ME_ADMIN_SA with the full ServiceAccount username
+#     allowed to debug these pods (format:
+#     "system:serviceaccount:<namespace>:<name>").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-ephemeral-containers-on-protected-pods
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-ephemeral-containers-on-protected-pods"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods/ephemeralcontainers"]
+  # Only evaluate when the pod runs under a protected ServiceAccount.
+  matchConditions:
+    - name: pod-uses-protected-sa
+      expression: >-
+        object.spec.serviceAccountName == 'REPLACE_ME_PROTECTED_SA'
+  validations:
+    # Only the designated admin ServiceAccount can add ephemeral containers to
+    # pods running with the protected SA. This prevents token theft via
+    # kubectl debug.
+    - expression: >-
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA"
+      messageExpression: >-
+        "Ephemeral containers are restricted on pods running with the " +
+        "protected ServiceAccount 'REPLACE_ME_PROTECTED_SA'. Only the " +
+        "designated admin ServiceAccount can debug these pods. " +
+        "Requesting user '" + request.userInfo.username + "' is not authorized."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-ephemeral-containers-on-protected-pods
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-ephemeral-containers-on-protected-pods"
+spec:
+  policyName: restrict-ephemeral-containers-on-protected-pods
+  validationActions: [Deny]

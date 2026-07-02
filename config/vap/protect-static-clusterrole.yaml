@@ -1,0 +1,64 @@
+# protect-static-clusterrole.yaml
+#
+# PURPOSE: Prevents unauthorized modification or deletion of a specific
+# ClusterRole. This protects the static (hand-crafted) ClusterRole that defines
+# the maximum permission boundary for an operator. Without this policy, the
+# operator itself could escalate its own privileges by mutating the ClusterRole
+# it is bound to.
+#
+# Only the designated admin ServiceAccount is allowed to update or delete the
+# protected ClusterRole.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_CLUSTERROLE_NAME with the name of the ClusterRole
+#     to protect (e.g., "my-operator-permissions").
+#   - Replace REPLACE_ME_ADMIN_SA with the full ServiceAccount username
+#     allowed to manage this ClusterRole (format:
+#     "system:serviceaccount:<namespace>:<name>").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-static-clusterrole
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-static-clusterrole"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["clusterroles"]
+  # Only evaluate when the target ClusterRole matches the protected name.
+  # For UPDATE, check object.metadata.name; for DELETE, check
+  # oldObject.metadata.name since the object may not be fully populated.
+  matchConditions:
+    - name: is-protected-clusterrole
+      expression: >-
+        (request.operation == "UPDATE" &&
+         object.metadata.name == 'REPLACE_ME_CLUSTERROLE_NAME')
+        ||
+        (request.operation == "DELETE" &&
+         oldObject.metadata.name == 'REPLACE_ME_CLUSTERROLE_NAME')
+  validations:
+    # Only the designated admin ServiceAccount can update or delete this
+    # ClusterRole. All other principals are denied.
+    - expression: >-
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA"
+      messageExpression: >-
+        "The ClusterRole 'REPLACE_ME_CLUSTERROLE_NAME' is protected. " +
+        "Only the designated admin ServiceAccount can modify or delete it. " +
+        "Requesting user '" + request.userInfo.username + "' is not authorized."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-static-clusterrole
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-static-clusterrole"
+spec:
+  policyName: protect-static-clusterrole
+  validationActions: [Deny]

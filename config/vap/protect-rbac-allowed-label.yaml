@@ -1,0 +1,69 @@
+# protect-rbac-allowed-label.yaml
+#
+# PURPOSE: Prevents unauthorized modification of the
+# operator-rbac-toolkit.io/rbac-allowed label on Namespace resources. Without
+# this protection, an attacker who can update namespace labels could add the
+# opt-in label to a namespace, then create managed RoleBindings there (bypassing
+# the allow-rolebinding-in-labeled-namespaces policy).
+#
+# Only the specified admin ServiceAccount is allowed to add, modify, or remove
+# this label.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_ADMIN_SA with the full ServiceAccount username
+#     allowed to manage this label (format:
+#     "system:serviceaccount:<namespace>:<name>").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-rbac-allowed-label
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-rbac-allowed-label"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["namespaces"]
+  # Only evaluate when the rbac-allowed label actually changed between the old
+  # and new object. Covers three cases: label added, label removed, label value
+  # modified.
+  matchConditions:
+    - name: rbac-allowed-label-changed
+      expression: >-
+        (has(object.metadata.labels) &&
+         'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels &&
+         !(has(oldObject.metadata.labels) &&
+           'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
+           oldObject.metadata.labels['operator-rbac-toolkit.io/rbac-allowed'] ==
+           object.metadata.labels['operator-rbac-toolkit.io/rbac-allowed']))
+        ||
+        (has(oldObject.metadata.labels) &&
+         'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
+         !(has(object.metadata.labels) &&
+           'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels))
+  validations:
+    # Only the designated admin ServiceAccount can add, modify, or remove this
+    # label. Update the placeholder with your admin SA username.
+    - expression: >-
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA"
+      messageExpression: >-
+        "Only the designated admin ServiceAccount can modify the " +
+        "operator-rbac-toolkit.io/rbac-allowed label on namespaces. " +
+        "Requesting user '" + request.userInfo.username + "' is not authorized. " +
+        "Contact a cluster admin to change this label."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-rbac-allowed-label
+  labels:
+    operator-rbac-toolkit.io/policy: "protect-rbac-allowed-label"
+spec:
+  policyName: protect-rbac-allowed-label
+  validationActions: [Deny]

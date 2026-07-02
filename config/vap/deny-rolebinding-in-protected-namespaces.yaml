@@ -1,0 +1,53 @@
+# deny-rolebinding-in-protected-namespaces.yaml
+#
+# PURPOSE: Blocks RoleBinding creation in sensitive system namespaces. The
+# deny-list covers kube-system, kube-public, kube-node-lease, default, and any
+# namespace prefixed with "openshift-". This is a defense-in-depth measure to
+# prevent both operators and attackers from placing RoleBindings in namespaces
+# that host critical cluster infrastructure.
+#
+# CUSTOMIZATION: Add or remove namespace names in the CEL list, or adjust the
+# startsWith prefix to match your cluster's protected namespace convention.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deny-rolebinding-in-protected-namespaces
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-rolebinding-in-protected-namespaces"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["rolebindings"]
+  validations:
+    # Deny if the target namespace is in the protected list or starts with
+    # "openshift-". The namespace is taken from the object metadata since
+    # RoleBindings are namespace-scoped resources.
+    - expression: >-
+        !(object.metadata.namespace in [
+          "kube-system",
+          "kube-public",
+          "kube-node-lease",
+          "default"
+        ]) &&
+        !object.metadata.namespace.startsWith("openshift-")
+      message: >-
+        RoleBindings cannot be created in protected namespaces: kube-system,
+        kube-public, kube-node-lease, default, or any namespace starting with
+        "openshift-". These namespaces are reserved for system components.
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-rolebinding-in-protected-namespaces
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-rolebinding-in-protected-namespaces"
+spec:
+  policyName: deny-rolebinding-in-protected-namespaces
+  validationActions: [Deny]

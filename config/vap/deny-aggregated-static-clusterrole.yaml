@@ -1,0 +1,57 @@
+# deny-aggregated-static-clusterrole.yaml
+#
+# PURPOSE: Blocks attempts to add an aggregationRule field to a specific
+# ClusterRole. If a static (hand-crafted) ClusterRole were converted to an
+# aggregated one, Kubernetes would automatically merge in rules from matching
+# ClusterRoles, allowing privilege escalation through label manipulation.
+#
+# This is a defense-in-depth companion to protect-static-clusterrole. Even if
+# an attacker bypasses the update protection, this policy ensures the
+# ClusterRole cannot be turned into an aggregated role.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_CLUSTERROLE_NAME with the name of the ClusterRole
+#     to protect (e.g., "my-operator-permissions").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deny-aggregated-static-clusterrole
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-aggregated-static-clusterrole"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["clusterroles"]
+  # Only evaluate when the target ClusterRole matches the protected name.
+  matchConditions:
+    - name: is-protected-clusterrole
+      expression: >-
+        object.metadata.name == 'REPLACE_ME_CLUSTERROLE_NAME'
+  validations:
+    # The protected ClusterRole must not have an aggregationRule field.
+    # Static ClusterRoles define their rules inline; aggregation would let
+    # external ClusterRoles inject arbitrary permissions.
+    - expression: >-
+        !has(object.aggregationRule)
+      message: >-
+        The ClusterRole 'REPLACE_ME_CLUSTERROLE_NAME' must remain a static
+        (non-aggregated) ClusterRole. Adding an aggregationRule would allow
+        privilege escalation through label-matched rule injection. Remove the
+        aggregationRule field from this ClusterRole.
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-aggregated-static-clusterrole
+  labels:
+    operator-rbac-toolkit.io/policy: "deny-aggregated-static-clusterrole"
+spec:
+  policyName: deny-aggregated-static-clusterrole
+  validationActions: [Deny]

@@ -1,0 +1,62 @@
+# restrict-scoped-rolebinding-creation.yaml
+#
+# PURPOSE: Ensures that only the scoping controller's ServiceAccount can CREATE
+# RoleBindings that carry the managed annotation
+# (operator-rbac-toolkit.io/scoped-access-owners). This prevents a compromised
+# operator from directly creating RoleBindings to grant itself arbitrary access.
+# Without this policy, any principal with rolebinding-create permission could
+# forge a managed RoleBinding and bypass the scoping controller entirely.
+#
+# CUSTOMIZATION:
+#   - Replace REPLACE_ME_NAMESPACE with the namespace where the scoping
+#     controller runs (e.g., "operator-rbac-toolkit-system").
+#   - Replace REPLACE_ME_SA_NAME with the ServiceAccount name of the scoping
+#     controller (e.g., "scoper-controller-manager").
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-scoped-rolebinding-creation
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-creation"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["rolebindings"]
+  # Only evaluate this policy when the RoleBinding carries the managed annotation.
+  # RoleBindings without the annotation are not managed by the scoping controller
+  # and are not subject to this restriction.
+  matchConditions:
+    - name: has-managed-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
+  validations:
+    # The requesting user must be the scoping controller's ServiceAccount.
+    # Kubernetes ServiceAccount usernames follow the format:
+    # system:serviceaccount:<namespace>:<name>
+    - expression: >-
+        request.userInfo.username ==
+        "system:serviceaccount:REPLACE_ME_NAMESPACE:REPLACE_ME_SA_NAME"
+      messageExpression: >-
+        "Only the scoping controller ServiceAccount " +
+        "'system:serviceaccount:REPLACE_ME_NAMESPACE:REPLACE_ME_SA_NAME' " +
+        "can create managed RoleBindings (those with the " +
+        "operator-rbac-toolkit.io/scoped-access-owners annotation). " +
+        "Requesting user: " + request.userInfo.username
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-scoped-rolebinding-creation
+  labels:
+    operator-rbac-toolkit.io/policy: "restrict-scoped-rolebinding-creation"
+spec:
+  policyName: restrict-scoped-rolebinding-creation
+  validationActions: [Deny]

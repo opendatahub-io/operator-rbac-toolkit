@@ -1,0 +1,70 @@
+# allow-rolebinding-in-labeled-namespaces.yaml
+#
+# PURPOSE: Ensures that managed RoleBindings (those with the
+# operator-rbac-toolkit.io/scoped-access-owners annotation) can only be created
+# in namespaces explicitly labeled with
+# operator-rbac-toolkit.io/rbac-allowed: "true". This gives cluster admins
+# opt-in control over which namespaces participate in operator RBAC scoping.
+#
+# HOW IT WORKS: The binding's namespaceSelector uses a DoesNotExist expression
+# to match namespaces that do NOT have the opt-in label. For those namespaces,
+# the policy fires and unconditionally denies managed RoleBinding creation.
+# Namespaces with the label are excluded from enforcement, so managed
+# RoleBindings are allowed there.
+#
+# CUSTOMIZATION: No REPLACE_ME placeholders. To change the opt-in label key,
+# update both the namespaceSelector matchExpressions in the binding and the
+# denial message.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: allow-rolebinding-in-labeled-namespaces
+  labels:
+    operator-rbac-toolkit.io/policy: "allow-rolebinding-in-labeled-namespaces"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["rolebindings"]
+  # Only evaluate RoleBindings that carry the managed annotation.
+  # Non-managed RoleBindings are not affected by this policy.
+  matchConditions:
+    - name: has-managed-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
+  validations:
+    # This expression always denies. The scoping is done by the binding's
+    # namespaceSelector, which only routes requests from unlabeled namespaces
+    # to this policy. Labeled namespaces never hit this validation.
+    - expression: "false"
+      message: >-
+        Managed RoleBindings (with operator-rbac-toolkit.io/scoped-access-owners
+        annotation) can only be created in namespaces labeled with
+        operator-rbac-toolkit.io/rbac-allowed: "true". This namespace does not
+        have the required label. Ask a cluster admin to label the namespace:
+        kubectl label namespace <name> operator-rbac-toolkit.io/rbac-allowed=true
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: allow-rolebinding-in-labeled-namespaces
+  labels:
+    operator-rbac-toolkit.io/policy: "allow-rolebinding-in-labeled-namespaces"
+spec:
+  policyName: allow-rolebinding-in-labeled-namespaces
+  validationActions: [Deny]
+  # Only enforce in namespaces that do NOT have the opt-in label.
+  # Namespaces with operator-rbac-toolkit.io/rbac-allowed: "true" are excluded,
+  # meaning managed RoleBindings are allowed there.
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: operator-rbac-toolkit.io/rbac-allowed
+          operator: DoesNotExist
