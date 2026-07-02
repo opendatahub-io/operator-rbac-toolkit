@@ -116,13 +116,18 @@ func (r *ScopingReconciler) ensureRoleBinding(ctx context.Context, cr *unstructu
 		return err
 	}
 
-	// MAJOR 2: drift detection for RoleRef and Subjects
 	if err := r.ensureRoleBindingSpec(ctx, existing, targetNamespace); err != nil {
 		return err
 	}
 
 	if r.isSameNamespace(cr, targetNamespace) {
-		return r.ensureOwnerReference(ctx, cr, existing)
+		// Re-fetch after drift correction since ensureRoleBindingSpec may have
+		// deleted and recreated the RoleBinding (RoleRef is immutable).
+		fresh := &rbacv1.RoleBinding{}
+		if err := r.Get(ctx, rbName, fresh); err != nil {
+			return err
+		}
+		return r.ensureOwnerReference(ctx, cr, fresh)
 	}
 
 	// CRITICAL 1: wrap annotation update in retry-on-conflict
