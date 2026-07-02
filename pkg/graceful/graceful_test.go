@@ -144,8 +144,9 @@ func TestSetCondition_TransitionUpdatesTime(t *testing.T) {
 func TestDo_Success(t *testing.T) {
 	cr := newTestCR()
 	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder)
 
-	result, err := Do(context.Background(), nil, cr, recorder, func() error {
+	result, err := handler.Do(context.Background(), nil, cr, func() error {
 		return nil
 	})
 	if err != nil {
@@ -159,9 +160,10 @@ func TestDo_Success(t *testing.T) {
 func TestDo_NonForbiddenError(t *testing.T) {
 	cr := newTestCR()
 	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder)
 
 	expectedErr := fmt.Errorf("connection refused")
-	result, err := Do(context.Background(), nil, cr, recorder, func() error {
+	result, err := handler.Do(context.Background(), nil, cr, func() error {
 		return expectedErr
 	})
 	if err != expectedErr {
@@ -175,6 +177,7 @@ func TestDo_NonForbiddenError(t *testing.T) {
 func TestDo_ForbiddenError_SetsConditionsAndEvents(t *testing.T) {
 	cr := newTestCR()
 	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder)
 
 	forbiddenErr := errors.NewForbidden(
 		schema.GroupResource{Group: "", Resource: "secrets"},
@@ -182,7 +185,7 @@ func TestDo_ForbiddenError_SetsConditionsAndEvents(t *testing.T) {
 		fmt.Errorf("user cannot list secrets in namespace \"kube-system\""),
 	)
 
-	result, err := Do(context.Background(), nil, cr, recorder, func() error {
+	result, err := handler.Do(context.Background(), nil, cr, func() error {
 		return forbiddenErr
 	})
 	if err != nil {
@@ -255,14 +258,15 @@ func TestDo_ForbiddenError_ExponentialBackoff(t *testing.T) {
 func TestDo_ForbiddenError_CustomOptions(t *testing.T) {
 	cr := newTestCR()
 	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder, WithRequeueAfter(10*time.Second), WithMaxRequeue(1*time.Minute))
 
-	result, err := Do(context.Background(), nil, cr, recorder, func() error {
+	result, err := handler.Do(context.Background(), nil, cr, func() error {
 		return errors.NewForbidden(
 			schema.GroupResource{Group: "", Resource: "configmaps"},
 			"",
 			fmt.Errorf("denied"),
 		)
-	}, WithRequeueAfter(10*time.Second), WithMaxRequeue(1*time.Minute))
+	})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -285,7 +289,8 @@ func TestDo_PermissionRestored_EmitsEvent(t *testing.T) {
 	// The Do call succeeds (no error), but we cannot do status update
 	// with fake client for our custom type. Verify that the condition
 	// was set on the object before the update call.
-	_, _ = Do(context.Background(), fakeClient, cr, recorder, func() error {
+	handler := NewHandler(recorder)
+	_, _ = handler.Do(context.Background(), fakeClient, cr, func() error {
 		return nil
 	})
 

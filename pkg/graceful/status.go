@@ -67,9 +67,10 @@ func setCondition(obj StatusProvider, condition metav1.Condition) {
 }
 
 func findCondition(obj StatusProvider, conditionType string) *metav1.Condition {
-	for _, c := range obj.GetConditions() {
-		if c.Type == conditionType {
-			return &c
+	conditions := obj.GetConditions()
+	for i := range conditions {
+		if conditions[i].Type == conditionType {
+			return &conditions[i]
 		}
 	}
 	return nil

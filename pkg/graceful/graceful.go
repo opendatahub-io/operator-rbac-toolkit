@@ -38,6 +38,12 @@ func (b *backoffTracker) reset(key string) {
 	delete(b.counts, key)
 }
 
+func (b *backoffTracker) resetAll() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	clear(b.counts)
+}
+
 // Handler wraps controller-runtime client operations with permission-aware error handling.
 type Handler struct {
 	recorder record.EventRecorder
@@ -65,14 +71,10 @@ func NewHandler(recorder record.EventRecorder, options ...Option) *Handler {
 // Returns (ctrl.Result{}, nil) on success so callers can continue reconciliation.
 // Returns (ctrl.Result{RequeueAfter: d}, nil) on Forbidden so the reconciler retries.
 // Returns (ctrl.Result{}, err) for non-Forbidden errors.
-func Do(ctx context.Context, c client.Client, obj client.Object, recorder record.EventRecorder, fn func() error, options ...Option) (ctrl.Result, error) {
-	h := NewHandler(recorder, options...)
-	return h.Do(ctx, c, obj, fn)
-}
-
 func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn func() error) (ctrl.Result, error) {
 	err := fn()
 	if err == nil {
+		h.backoff.resetAll()
 		sp, ok := obj.(StatusProvider)
 		if ok {
 			prev := findCondition(sp, ConditionTypePermissionGranted)
@@ -92,7 +94,7 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 	}
 
 	msg := parseForbiddenMessage(err)
-	backoffKey := msg
+	backoffKey := backoffKeyFromError(err)
 
 	count := h.backoff.increment(backoffKey)
 	requeue := h.calculateBackoff(count)
@@ -123,6 +125,19 @@ func (h *Handler) calculateBackoff(count int) time.Duration {
 
 func (h *Handler) ResetBackoff(key string) {
 	h.backoff.reset(key)
+}
+
+// backoffKeyFromError extracts a structured key from a Forbidden error based on
+// the resource group/resource/name, avoiding unbounded map growth from arbitrary
+// error messages.
+func backoffKeyFromError(err error) string {
+	if statusErr, ok := err.(*errors.StatusError); ok {
+		d := statusErr.ErrStatus.Details
+		if d != nil {
+			return fmt.Sprintf("%s/%s/%s", d.Group, d.Kind, d.Name)
+		}
+	}
+	return err.Error()
 }
 
 func parseForbiddenMessage(err error) string {

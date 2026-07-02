@@ -25,7 +25,7 @@ func componentClusterRole(name string, rules []rbacv1.PolicyRule) *rbacv1.Cluste
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				AggregateToEditLabel: "true",
+				aggregateToEditLabel: "true",
 			},
 		},
 		Rules: rules,
@@ -121,7 +121,7 @@ func TestReconcile_NoImpersonateVerb_Noop(t *testing.T) {
 			Verbs:     []string{"get", "list"},
 		},
 	})
-	cr.Annotations = map[string]string{AutoupdateAnnotation: "false"}
+	cr.Annotations = map[string]string{autoupdateAnnotation: "false"}
 
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
 	g := NewGuard(c, logr.Discard(), DefaultGuardConfig())
@@ -165,7 +165,7 @@ func TestReconcile_SetsAutoupdateAnnotation(t *testing.T) {
 		t.Fatalf("getting updated ClusterRole: %v", err)
 	}
 
-	val, ok := updated.Annotations[AutoupdateAnnotation]
+	val, ok := updated.Annotations[autoupdateAnnotation]
 	if !ok || val != "false" {
 		t.Errorf("expected autoupdate annotation to be 'false', got %q (present: %v)", val, ok)
 	}
@@ -254,9 +254,177 @@ func TestReconcile_SkipsNonAggregateLabel(t *testing.T) {
 	}
 }
 
+func TestReconcile_WildcardVerbOnServiceAccounts(t *testing.T) {
+	cr := componentClusterRole("system:aggregate-to-edit-wildcard-verb", []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"serviceaccounts"},
+			Verbs:     []string{"*"},
+		},
+	})
+
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
+	g := NewGuard(c, logr.Discard(), DefaultGuardConfig())
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}
+	_, err := g.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated rbacv1.ClusterRole
+	if err := c.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &updated); err != nil {
+		t.Fatalf("getting updated ClusterRole: %v", err)
+	}
+
+	if hasImpersonateVerb(updated.Rules) {
+		t.Error("wildcard verb should have been expanded and impersonate removed")
+	}
+
+	// The wildcard should be replaced with explicit standard verbs.
+	if len(updated.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(updated.Rules))
+	}
+
+	expectedVerbs := map[string]bool{
+		"get": true, "list": true, "watch": true,
+		"create": true, "update": true, "patch": true, "delete": true,
+	}
+	if len(updated.Rules[0].Verbs) != len(expectedVerbs) {
+		t.Fatalf("expected %d verbs, got %d: %v", len(expectedVerbs), len(updated.Rules[0].Verbs), updated.Rules[0].Verbs)
+	}
+	for _, v := range updated.Rules[0].Verbs {
+		if !expectedVerbs[v] {
+			t.Errorf("unexpected verb %q after wildcard expansion", v)
+		}
+	}
+
+	// Annotation should also be set.
+	val, ok := updated.Annotations[autoupdateAnnotation]
+	if !ok || val != "false" {
+		t.Errorf("expected autoupdate annotation to be 'false', got %q (present: %v)", val, ok)
+	}
+}
+
+func TestReconcile_WildcardResourceWithImpersonate(t *testing.T) {
+	cr := componentClusterRole("system:aggregate-to-edit-wildcard-resource", []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"*"},
+			Verbs:     []string{"get", "impersonate", "list"},
+		},
+	})
+
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
+	g := NewGuard(c, logr.Discard(), DefaultGuardConfig())
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}
+	_, err := g.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated rbacv1.ClusterRole
+	if err := c.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &updated); err != nil {
+		t.Fatalf("getting updated ClusterRole: %v", err)
+	}
+
+	if hasImpersonateVerb(updated.Rules) {
+		t.Error("impersonate verb should have been removed from wildcard resource rule")
+	}
+
+	if len(updated.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(updated.Rules))
+	}
+
+	expectedVerbs := map[string]bool{"get": true, "list": true}
+	if len(updated.Rules[0].Verbs) != len(expectedVerbs) {
+		t.Fatalf("expected %d verbs, got %d: %v", len(expectedVerbs), len(updated.Rules[0].Verbs), updated.Rules[0].Verbs)
+	}
+	for _, v := range updated.Rules[0].Verbs {
+		if !expectedVerbs[v] {
+			t.Errorf("unexpected verb %q in wildcard resource rule", v)
+		}
+	}
+}
+
+func TestReconcile_WildcardVerbAndWildcardResource(t *testing.T) {
+	cr := componentClusterRole("system:aggregate-to-edit-double-wildcard", []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"*"},
+			Verbs:     []string{"*"},
+		},
+	})
+
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
+	g := NewGuard(c, logr.Discard(), DefaultGuardConfig())
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}
+	_, err := g.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated rbacv1.ClusterRole
+	if err := c.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &updated); err != nil {
+		t.Fatalf("getting updated ClusterRole: %v", err)
+	}
+
+	if hasImpersonateVerb(updated.Rules) {
+		t.Error("wildcard verb+resource should have been expanded and impersonate removed")
+	}
+
+	if len(updated.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(updated.Rules))
+	}
+
+	expectedVerbs := map[string]bool{
+		"get": true, "list": true, "watch": true,
+		"create": true, "update": true, "patch": true, "delete": true,
+	}
+	if len(updated.Rules[0].Verbs) != len(expectedVerbs) {
+		t.Fatalf("expected %d verbs, got %d: %v", len(expectedVerbs), len(updated.Rules[0].Verbs), updated.Rules[0].Verbs)
+	}
+	for _, v := range updated.Rules[0].Verbs {
+		if !expectedVerbs[v] {
+			t.Errorf("unexpected verb %q after wildcard expansion", v)
+		}
+	}
+}
+
+func TestReconcile_NoAnnotationOnCleanClusterRole(t *testing.T) {
+	// A ClusterRole without impersonate should not get the autoupdate annotation modified.
+	cr := componentClusterRole("system:aggregate-to-edit-clean", []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"serviceaccounts"},
+			Verbs:     []string{"get", "list"},
+		},
+	})
+
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
+	g := NewGuard(c, logr.Discard(), DefaultGuardConfig())
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}
+	_, err := g.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated rbacv1.ClusterRole
+	if err := c.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &updated); err != nil {
+		t.Fatalf("getting updated ClusterRole: %v", err)
+	}
+
+	if _, ok := updated.Annotations[autoupdateAnnotation]; ok {
+		t.Error("autoupdate annotation should not be set on a ClusterRole that had no impersonate verb")
+	}
+}
+
 func TestReconcile_RequeueAfterIsConfigurable(t *testing.T) {
 	cr := componentClusterRole("test-cr", []rbacv1.PolicyRule{})
-	cr.Annotations = map[string]string{AutoupdateAnnotation: "false"}
+	cr.Annotations = map[string]string{autoupdateAnnotation: "false"}
 
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(cr).Build()
 	cfg := DefaultGuardConfig()

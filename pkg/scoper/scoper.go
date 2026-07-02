@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -26,6 +27,8 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 		denyList = DefaultDenyList(cfg.ControllerNamespace)
 	}
 
+	recorder := mgr.GetEventRecorderFor("rbac-scoper")
+
 	for i, target := range cfg.Targets {
 		if err := validateTarget(target); err != nil {
 			return fmt.Errorf("invalid target %d: %w", i, err)
@@ -36,7 +39,7 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 				"clusterRole", target.ClusterRoleName)
 		}
 
-		rec, err := NewScopingReconciler(mgr.GetClient(), target, denyList)
+		rec, err := NewScopingReconciler(mgr.GetClient(), target, denyList, recorder)
 		if err != nil {
 			return fmt.Errorf("creating reconciler for target %d: %w", i, err)
 		}
@@ -54,6 +57,17 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 				&corev1.Namespace{},
 				handler.EnqueueRequestsFromMapFunc(namespaceToRequests(mgr.GetClient(), target)),
 			)
+		}
+
+		// MAJOR 6: Check CRD availability before completing the controller.
+		// If the CRD for the watched GVK doesn't exist yet, the informer will fail.
+		// Log a warning and skip this target rather than failing startup.
+		// TODO: implement exponential backoff retry for CRD availability,
+		// re-registering the controller once the CRD becomes available.
+		if !isCRDAvailable(mgr, target.WatchGVK) {
+			logger.Info("CRD not available, skipping controller registration (will not auto-retry)",
+				"gvk", target.WatchGVK.String())
+			continue
 		}
 
 		if err := builder.Complete(rec); err != nil {
@@ -115,7 +129,8 @@ func filterCrossNamespaceTargets(targets []ScopingTarget) []ScopingTarget {
 func namespaceToRequests(c client.Client, target ScopingTarget) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []ctrl.Request {
 		crList := &unstructured.UnstructuredList{}
-		crList.SetGroupVersionKind(target.WatchGVK)
+		listGVK := target.WatchGVK.GroupVersion().WithKind(target.WatchGVK.Kind + "List")
+		crList.SetGroupVersionKind(listGVK)
 		if err := c.List(ctx, crList); err != nil {
 			return nil
 		}
@@ -128,4 +143,11 @@ func namespaceToRequests(c client.Client, target ScopingTarget) handler.MapFunc 
 		}
 		return requests
 	}
+}
+
+// isCRDAvailable checks whether the API server knows about the given GVK
+// by querying the discovery cache (RESTMapper).
+func isCRDAvailable(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
+	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	return err == nil
 }

@@ -39,6 +39,14 @@ func NewWebhook(config WebhookConfig, scheme *runtime.Scheme) *SAProtectionWebho
 }
 
 func (w *SAProtectionWebhook) Handle(ctx context.Context, req admission.Request) admission.Response {
+	// Only CREATE and UPDATE can assign a ServiceAccount to a pod.
+	// Allow all other operations (DELETE, CONNECT) to pass through without
+	// decoding the object, which would fail for DELETE (empty object body)
+	// and cause a 500 error.
+	if req.Operation != admissionv1.Create && req.Operation != admissionv1.Update {
+		return admission.Allowed("")
+	}
+
 	pod := &corev1.Pod{}
 	if err := w.decoder.Decode(req, pod); err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("failed to decode pod: %w", err))

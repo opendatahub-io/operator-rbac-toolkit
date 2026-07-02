@@ -45,16 +45,10 @@ func (r *CleanupReconciler) runCleanup(ctx context.Context) {
 	logger := log.Log.WithName("scoper-cleanup")
 
 	for _, target := range r.Targets {
-		rbList := &rbacv1.RoleBindingList{}
-		if err := r.List(ctx, rbList, client.MatchingFields{"metadata.name": target.ManagedRoleBindingName}); err != nil {
-			if err := r.listAndCleanup(ctx, target); err != nil {
-				logger.Error(err, "cleanup failed for target", "roleBinding", target.ManagedRoleBindingName)
-			}
-			continue
-		}
-
-		for _, rb := range rbList.Items {
-			r.cleanupRoleBinding(ctx, &rb, target)
+		// No field indexer is registered for RoleBindings, so always use
+		// client-side filtering to avoid silent failures.
+		if err := r.listAndCleanup(ctx, target); err != nil {
+			logger.Error(err, "cleanup failed for target", "roleBinding", target.ManagedRoleBindingName)
 		}
 	}
 }
@@ -112,11 +106,19 @@ func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.R
 }
 
 func (r *CleanupReconciler) isOwnerValid(ctx context.Context, entry OwnerEntry, target ScopingTarget, rbNamespace string) bool {
+	logger := log.Log.WithName("scoper-cleanup")
+
 	cr := &unstructured.Unstructured{}
 	cr.SetGroupVersionKind(target.WatchGVK)
 	err := r.Get(ctx, types.NamespacedName{Namespace: entry.Namespace, Name: entry.Name}, cr)
 	if err != nil {
-		return false
+		if apierrors.IsNotFound(err) {
+			return false
+		}
+		// On transient errors (network, timeout), assume valid to avoid premature cleanup
+		logger.V(1).Info("transient error checking owner, assuming valid",
+			"owner", entry.Namespace+"/"+entry.Name, "error", err)
+		return true
 	}
 	if cr.GetUID() != entry.UID {
 		return false

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,12 +20,18 @@ func Scan(ctx context.Context, c client.Client, cfg Config) ([]Finding, error) {
 	}
 
 	var all []Finding
+	var scanErrors []error
 	for _, scan := range scanners {
 		findings, err := scan()
 		if err != nil {
-			return nil, fmt.Errorf("audit scan failed: %w", err)
+			scanErrors = append(scanErrors, err)
+			continue
 		}
 		all = append(all, findings...)
+	}
+
+	if len(scanErrors) > 0 {
+		return all, fmt.Errorf("audit scan errors: %w", errors.Join(scanErrors...))
 	}
 
 	return all, nil

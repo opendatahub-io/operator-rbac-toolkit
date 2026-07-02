@@ -433,9 +433,10 @@ func TestScan_IntegrationAllScanners(t *testing.T) {
 		categories[f.Category]++
 	}
 
-	// impersonate-role + aggregate-to-edit both have impersonate on SAs
-	if categories["impersonation-grants"] < 1 {
-		t.Errorf("expected at least 1 impersonation-grants finding, got %d", categories["impersonation-grants"])
+	// Only impersonate-role produces impersonation-grants findings;
+	// system:aggregate-to-edit is excluded (has its own dedicated scanner).
+	if categories["impersonation-grants"] != 1 {
+		t.Errorf("expected 1 impersonation-grants finding, got %d", categories["impersonation-grants"])
 	}
 	if categories["tokenrequest-exposure"] != 1 {
 		t.Errorf("expected 1 tokenrequest-exposure finding, got %d", categories["tokenrequest-exposure"])

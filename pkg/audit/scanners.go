@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -18,6 +19,11 @@ func scanImpersonationGrants(ctx context.Context, c client.Client) ([]Finding, e
 		return nil, fmt.Errorf("listing ClusterRoles: %w", err)
 	}
 	for _, cr := range clusterRoles.Items {
+		// Skip system:aggregate-to-edit, it has a dedicated scanner
+		// (scanAggregateToEditStatus) to avoid duplicate findings.
+		if cr.Name == "system:aggregate-to-edit" {
+			continue
+		}
 		for _, rule := range cr.Rules {
 			if grantsImpersonateOnSAs(rule) {
 				findings = append(findings, Finding{
@@ -98,6 +104,9 @@ func scanAggregateToEditStatus(ctx context.Context, c client.Client) ([]Finding,
 	cr := &rbacv1.ClusterRole{}
 	key := client.ObjectKey{Name: "system:aggregate-to-edit"}
 	if err := c.Get(ctx, key, cr); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("getting system:aggregate-to-edit: %w", err)
 	}
 
@@ -125,41 +134,42 @@ func scanUnusedPermissions(ctx context.Context, c client.Client, cfg Config) ([]
 		return nil, fmt.Errorf("listing ClusterRoleBindings: %w", err)
 	}
 
-	var clusterRoleName string
+	// Collect all ClusterRole names bound to the target ServiceAccount.
+	seen := make(map[string]bool)
+	var clusterRoleNames []string
 	for _, b := range bindings.Items {
 		for _, s := range b.Subjects {
 			if s.Kind == "ServiceAccount" &&
 				s.Name == cfg.ServiceAccount.Name &&
-				s.Namespace == cfg.ServiceAccount.Namespace {
-				if b.RoleRef.Kind == "ClusterRole" {
-					clusterRoleName = b.RoleRef.Name
-					break
-				}
+				s.Namespace == cfg.ServiceAccount.Namespace &&
+				b.RoleRef.Kind == "ClusterRole" &&
+				!seen[b.RoleRef.Name] {
+				seen[b.RoleRef.Name] = true
+				clusterRoleNames = append(clusterRoleNames, b.RoleRef.Name)
 			}
-		}
-		if clusterRoleName != "" {
-			break
 		}
 	}
 
-	if clusterRoleName == "" {
+	if len(clusterRoleNames) == 0 {
 		return nil, nil
 	}
 
-	cr := &rbacv1.ClusterRole{}
-	if err := c.Get(ctx, client.ObjectKey{Name: clusterRoleName}, cr); err != nil {
-		return nil, fmt.Errorf("getting ClusterRole %q: %w", clusterRoleName, err)
-	}
-
 	var findings []Finding
-	for _, actual := range cr.Rules {
-		if !ruleMatchesAnyExpected(actual, cfg.ExpectedRules) {
-			findings = append(findings, Finding{
-				Severity: Info,
-				Category: "unused-permissions",
-				Message:  fmt.Sprintf("Rule in ClusterRole %q not in expected set: %s", clusterRoleName, formatRule(actual)),
-				Resource: &ResourceRef{Kind: "ClusterRole", Name: clusterRoleName},
-			})
+	for _, clusterRoleName := range clusterRoleNames {
+		cr := &rbacv1.ClusterRole{}
+		if err := c.Get(ctx, client.ObjectKey{Name: clusterRoleName}, cr); err != nil {
+			return nil, fmt.Errorf("getting ClusterRole %q: %w", clusterRoleName, err)
+		}
+
+		for _, actual := range cr.Rules {
+			if !ruleMatchesAnyExpected(actual, cfg.ExpectedRules) {
+				findings = append(findings, Finding{
+					Severity: Info,
+					Category: "unused-permissions",
+					Message:  fmt.Sprintf("Rule in ClusterRole %q not in expected set: %s", clusterRoleName, formatRule(actual)),
+					Resource: &ResourceRef{Kind: "ClusterRole", Name: clusterRoleName},
+				})
+			}
 		}
 	}
 

@@ -137,6 +137,50 @@ func TestUpdateNotChangingSA(t *testing.T) {
 	}
 }
 
+func TestUpdateChangingFromProtectedSAAllowed(t *testing.T) {
+	wh := NewWebhook(WebhookConfig{
+		ProtectedServiceAccounts: []string{"operator-sa"},
+		AllowedIdentities:        []string{"system:serviceaccount:ns:controller"},
+	}, newScheme())
+
+	oldRaw := podJSON(t, "operator-sa")
+	newRaw := podJSON(t, "some-other-sa")
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UID:       "6",
+			Operation: admissionv1.Update,
+			Object:    runtime.RawExtension{Raw: newRaw},
+			OldObject: runtime.RawExtension{Raw: oldRaw},
+			UserInfo:  authenticationv1.UserInfo{Username: "random-user"},
+		},
+	}
+
+	resp := wh.Handle(context.Background(), req)
+	if !resp.Allowed {
+		t.Fatalf("expected allow for update changing away from protected SA, got deny: %s", resp.Result.Message)
+	}
+}
+
+func TestDeleteOperationAllowed(t *testing.T) {
+	wh := NewWebhook(WebhookConfig{
+		ProtectedServiceAccounts: []string{"operator-sa"},
+		AllowedIdentities:        []string{"system:serviceaccount:ns:controller"},
+	}, newScheme())
+
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UID:       "7",
+			Operation: admissionv1.Delete,
+			UserInfo:  authenticationv1.UserInfo{Username: "attacker"},
+		},
+	}
+
+	resp := wh.Handle(context.Background(), req)
+	if !resp.Allowed {
+		t.Fatalf("expected allow for DELETE operation, got deny: %s", resp.Result.Message)
+	}
+}
+
 func TestUpdateChangingToProtectedSAUnauthorized(t *testing.T) {
 	wh := NewWebhook(WebhookConfig{
 		ProtectedServiceAccounts: []string{"operator-sa"},

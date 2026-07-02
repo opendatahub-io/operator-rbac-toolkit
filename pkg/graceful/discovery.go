@@ -2,6 +2,7 @@ package graceful
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -52,8 +53,13 @@ func DiscoverPermissions(ctx context.Context, c client.Client, spec PermissionSp
 		wg.Add(1)
 		go func(idx int, ch ssarCheck) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errs[idx] = ctx.Err()
+				return
+			}
 
 			allowed, err := checkSSAR(ctx, c, ch)
 			if err != nil {
@@ -71,10 +77,14 @@ func DiscoverPermissions(ctx context.Context, c client.Client, spec PermissionSp
 	}
 	wg.Wait()
 
+	var joinedErr error
 	for _, err := range errs {
 		if err != nil {
-			return nil, fmt.Errorf("SSAR check failed: %w", err)
+			joinedErr = errors.Join(joinedErr, err)
 		}
+	}
+	if joinedErr != nil {
+		return nil, fmt.Errorf("SSAR check failed: %w", joinedErr)
 	}
 
 	report := &PermissionReport{}
@@ -188,10 +198,9 @@ func DiscoverNamespacedPermissions(ctx context.Context, c client.Client, group, 
 	for _, r := range report.Granted {
 		result[r.Namespace] = true
 	}
+	// Process denied last so denial overrides any prior grant (fail-closed).
 	for _, r := range report.Denied {
-		if _, exists := result[r.Namespace]; !exists {
-			result[r.Namespace] = false
-		}
+		result[r.Namespace] = false
 	}
 	return result, nil
 }

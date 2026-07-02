@@ -36,44 +36,34 @@ func (g *Guard) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, e
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if cr.Labels[AggregateToEditLabel] != "true" {
+	if cr.Labels[aggregateToEditLabel] != "true" {
 		return ctrl.Result{}, nil
 	}
 
 	if !hasImpersonateVerb(cr.Rules) {
 		log.V(1).Info("no impersonate verb found, nothing to do")
-		return g.ensureAutoupdateAnnotation(ctx, &cr)
+		return ctrl.Result{RequeueAfter: g.Config.RequeueAfter}, nil
 	}
 
 	log.Info("found impersonate verb in component ClusterRole, removing it")
 	cr.Rules = removeImpersonateVerb(cr.Rules)
 
-	if err := g.Update(ctx, &cr); err != nil {
-		return ctrl.Result{}, fmt.Errorf("removing impersonate verb from ClusterRole %s: %w", cr.Name, err)
-	}
-
-	return g.ensureAutoupdateAnnotation(ctx, &cr)
-}
-
-func (g *Guard) ensureAutoupdateAnnotation(ctx context.Context, cr *rbacv1.ClusterRole) (ctrl.Result, error) {
-	if cr.Annotations[AutoupdateAnnotation] == "false" {
-		return ctrl.Result{RequeueAfter: g.Config.RequeueAfter}, nil
-	}
-
+	// Combine rule mutation and annotation into a single Update to avoid
+	// a stale-object conflict on the second call.
 	if cr.Annotations == nil {
 		cr.Annotations = make(map[string]string)
 	}
-	cr.Annotations[AutoupdateAnnotation] = "false"
+	cr.Annotations[autoupdateAnnotation] = "false"
 
-	if err := g.Update(ctx, cr); err != nil {
-		return ctrl.Result{}, fmt.Errorf("setting autoupdate annotation on ClusterRole %s: %w", cr.Name, err)
+	if err := g.Update(ctx, &cr); err != nil {
+		return ctrl.Result{}, fmt.Errorf("removing impersonate verb from ClusterRole %s: %w", cr.Name, err)
 	}
 
 	return ctrl.Result{RequeueAfter: g.Config.RequeueAfter}, nil
 }
 
 func (g *Guard) SetupWithManager(mgr ctrl.Manager) error {
-	labelSelector, err := labels.Parse(AggregateToEditLabel + "=true")
+	labelSelector, err := labels.Parse(aggregateToEditLabel + "=true")
 	if err != nil {
 		return fmt.Errorf("parsing label selector: %w", err)
 	}
@@ -104,7 +94,7 @@ func hasImpersonateVerb(rules []rbacv1.PolicyRule) bool {
 			continue
 		}
 		for _, verb := range rule.Verbs {
-			if verb == "impersonate" {
+			if verb == "impersonate" || verb == "*" {
 				return true
 			}
 		}
@@ -114,11 +104,17 @@ func hasImpersonateVerb(rules []rbacv1.PolicyRule) bool {
 
 func coversServiceAccounts(rule rbacv1.PolicyRule) bool {
 	for _, res := range rule.Resources {
-		if res == "serviceaccounts" {
+		if res == "serviceaccounts" || res == "*" {
 			return true
 		}
 	}
 	return false
+}
+
+// standardVerbsWithoutImpersonate is the explicit set of standard Kubernetes
+// RBAC verbs that replace a wildcard ("*") after stripping "impersonate".
+var standardVerbsWithoutImpersonate = []string{
+	"get", "list", "watch", "create", "update", "patch", "delete",
 }
 
 func removeImpersonateVerb(rules []rbacv1.PolicyRule) []rbacv1.PolicyRule {
@@ -129,11 +125,25 @@ func removeImpersonateVerb(rules []rbacv1.PolicyRule) []rbacv1.PolicyRule {
 			continue
 		}
 
+		hasWildcard := false
 		var filteredVerbs []string
 		for _, verb := range rule.Verbs {
-			if verb != "impersonate" {
+			switch verb {
+			case "impersonate":
+				// Drop it.
+			case "*":
+				hasWildcard = true
+			default:
 				filteredVerbs = append(filteredVerbs, verb)
 			}
+		}
+
+		if hasWildcard {
+			// Replace the wildcard with all standard verbs except impersonate.
+			// Any other explicit verbs already collected are a subset, so just
+			// use the canonical list.
+			filteredVerbs = make([]string, len(standardVerbsWithoutImpersonate))
+			copy(filteredVerbs, standardVerbsWithoutImpersonate)
 		}
 
 		if len(filteredVerbs) > 0 {

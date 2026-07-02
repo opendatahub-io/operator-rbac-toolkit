@@ -18,9 +18,10 @@ const (
 	EventReasonPermissionDenied   = "PermissionDenied"
 	EventReasonPermissionRestored = "PermissionRestored"
 
-	DefaultRequeueAfter  = 30 * time.Second
-	DefaultMaxRequeue    = 5 * time.Minute
+	DefaultRequeueAfter   = 30 * time.Second
+	DefaultMaxRequeue     = 5 * time.Minute
 	DefaultMaxConcurrency = 10
+	DefaultBackoffFactor  = 2.0
 )
 
 type ResourceSpec struct {
@@ -59,7 +60,7 @@ func defaultOptions() Options {
 	return Options{
 		RequeueAfter:  DefaultRequeueAfter,
 		MaxRequeue:    DefaultMaxRequeue,
-		BackoffFactor: 2.0,
+		BackoffFactor: DefaultBackoffFactor,
 	}
 }
 
@@ -79,6 +80,9 @@ func WithMaxRequeue(d time.Duration) Option {
 
 func WithBackoffFactor(f float64) Option {
 	return func(o *Options) {
+		if f < 1.0 {
+			f = DefaultBackoffFactor
+		}
 		o.BackoffFactor = f
 	}
 }
