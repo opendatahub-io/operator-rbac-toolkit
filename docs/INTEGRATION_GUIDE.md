@@ -3,9 +3,9 @@
 This guide walks through integrating the operator-rbac-toolkit into your Kubernetes operator and cluster, step by step. Every code example uses the real types and function signatures from the codebase. Read the [Technical Design](TECHNICAL_DESIGN.md) for architecture context and tradeoff analysis.
 
 **Prerequisites:**
-- Go 1.22+
+- Go 1.25+
 - Kubernetes 1.25+ (1.30+ for VAP templates)
-- [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) v0.18+
+- [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) v0.22+
 - A Kubernetes operator built with controller-runtime (Operator SDK, Kubebuilder, or equivalent)
 
 ---

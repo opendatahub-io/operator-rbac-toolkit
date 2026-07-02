@@ -346,7 +346,7 @@ type ScopingTarget struct {
 }
 ```
 
-For the standalone binary, this configuration is provided via a ConfigMap. The controller reads this ConfigMap at startup and **requires a restart** to pick up changes (hot-reload is not supported to avoid complexity in a security-critical component). The ConfigMap must reside in a privileged admin namespace with restricted access.
+For the standalone binary, this configuration is provided via a YAML file (typically mounted from a ConfigMap). The controller reads the file at startup via `--config` (default: `/etc/rbac-scoper/config.yaml`) and **requires a restart** to pick up changes (hot-reload is not supported to avoid complexity in a security-critical component). The ConfigMap must reside in a privileged admin namespace with restricted access.
 
 ```yaml
 apiVersion: v1
@@ -355,30 +355,32 @@ metadata:
   name: rbac-scoper-config
   namespace: rbac-scoper-system
 data:
-  targets: |
-    - watchGVK:
-        group: dashboard.opendatahub.io
-        version: v1alpha1
-        kind: OdhDashboardConfig
-      targetSA:
-        name: odh-dashboard
-        namespace: redhat-ods-applications
-      clusterRoleName: odh-dashboard-scoped
-      managedRoleBindingName: odh-dashboard-scoped-binding
-      namespaceSelector:
-        matchLabels:
-          opendatahub.io/dashboard: "true"
-    - watchGVK:
-        group: dashboard.opendatahub.io
-        version: v1alpha1
-        kind: OdhDashboardConfig
-      targetSA:
-        name: odh-dashboard
-        namespace: redhat-ods-applications
-      clusterRoleName: odh-dashboard-notebooks
-      managedRoleBindingName: odh-dashboard-notebooks-binding
-      targetNamespaceSource:
-        fieldPath: ".spec.notebookController.notebookNamespace"
+  config.yaml: |
+    controllerNamespace: rbac-scoper-system
+    targets:
+      - watchGVK:
+          group: dashboard.opendatahub.io
+          version: v1alpha1
+          kind: OdhDashboardConfig
+        targetSA:
+          name: odh-dashboard
+          namespace: redhat-ods-applications
+        clusterRoleName: odh-dashboard-scoped
+        managedRoleBindingName: odh-dashboard-scoped-binding
+        namespaceSelector:
+          matchLabels:
+            opendatahub.io/dashboard: "true"
+      - watchGVK:
+          group: dashboard.opendatahub.io
+          version: v1alpha1
+          kind: OdhDashboardConfig
+        targetSA:
+          name: odh-dashboard
+          namespace: redhat-ods-applications
+        clusterRoleName: odh-dashboard-notebooks
+        managedRoleBindingName: odh-dashboard-notebooks-binding
+        targetNamespaceSource:
+          fieldPath: ".spec.notebookController.notebookNamespace"
 ```
 
 **Startup behavior:**
