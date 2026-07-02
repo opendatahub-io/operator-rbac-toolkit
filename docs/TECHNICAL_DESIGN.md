@@ -190,6 +190,18 @@ The library wraps controller-runtime client operations with permission-aware err
 4. The reconciler returns a `RequeueAfter` result to retry when permissions may have changed.
 
 ```go
+type MyReconciler struct {
+    client.Client
+    graceful *graceful.Handler
+}
+
+func NewMyReconciler(mgr ctrl.Manager) *MyReconciler {
+    return &MyReconciler{
+        Client:   mgr.GetClient(),
+        graceful: graceful.NewHandler(mgr.GetEventRecorderFor("my-operator")),
+    }
+}
+
 func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
     cr := &v1alpha1.MyCR{}
     if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
@@ -197,7 +209,7 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
     }
 
     secrets := &corev1.SecretList{}
-    result, err := graceful.Do(ctx, r.Client, cr, func() error {
+    result, err := r.graceful.Do(ctx, r.Client, cr, func() error {
         return r.List(ctx, secrets, client.InNamespace(cr.Namespace))
     })
     if err != nil {
@@ -372,7 +384,7 @@ data:
 **Startup behavior:**
 - If the ConfigMap is malformed, the controller fails fast at startup with a descriptive error. It does not start with empty configuration.
 - If a referenced ClusterRole does not exist, the controller logs a warning and emits a Kubernetes event but continues to process other targets. RoleBindings referencing non-existent ClusterRoles are not created; the condition is re-checked on each reconciliation.
-- If a configured GVK's CRD is not yet installed, the controller retries CRD discovery with exponential backoff (1s, 2s, 4s, ... up to 60s). This handles the case where the scoping controller starts before the operator whose CRDs it watches.
+- If a configured GVK's CRD is not yet installed, the controller logs a warning and skips that target. The controller must be restarted after the CRD becomes available. Deploy the scoping controller after the target CRDs are installed (e.g., in the same Helm release or Kustomize overlay) to avoid this scenario.
 
 #### 5.3.2 CR Lifecycle Flow
 
@@ -479,7 +491,7 @@ The scoping controller's ServiceAccount needs:
 | Permission | Purpose |
 |------------|---------|
 | `get`, `list`, `watch` on target CRDs | Detecting CR creation and deletion |
-| `get`, `create`, `update`, `patch`, `delete` on `rolebindings` | Managing namespace-scoped RoleBindings (patch for OwnerReference updates) |
+| `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` on `rolebindings` | Managing namespace-scoped RoleBindings (list/watch for cleanup and drift detection, patch for OwnerReference updates) |
 | `bind` on the static ClusterRole (via `resourceNames`) | Creating RoleBindings that reference the static ClusterRole |
 | `get` on `clusterroles` (via `resourceNames`) | Startup validation of static ClusterRole (no aggregationRule) |
 | `get`, `list`, `watch` on `namespaces` | Namespace label watching (required when `NamespaceSelector` is configured) |
@@ -1051,7 +1063,7 @@ ValidatingAdmissionPolicies cannot intercept operations on VAP resources themsel
 
 ### 13.5 CRD Not Yet Installed
 
-If the scoping controller starts before the CRD for a configured GVK is installed, the controller retries CRD discovery with exponential backoff. RoleBindings for that target are not created until the CRD becomes available. The controller continues to process other configured targets while waiting.
+If the scoping controller starts before the CRD for a configured GVK is installed, the controller logs a warning and skips that target. RoleBindings for that target are not created. The controller continues to process other configured targets. A controller restart is required after the CRD becomes available.
 
 The CRD retry mechanism does not validate CRD provenance. If an attacker creates a CRD with the configured GVK before the legitimate operator's CRD is installed, the scoping controller would discover the attacker's CRD. Mitigation: deploy the scoping controller after the target CRDs are installed (e.g., in the same Helm release or Kustomize overlay), or use CRD-level RBAC to restrict who can create CRDs.
 

@@ -27,24 +27,30 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        operations: ["UPDATE"]
+        operations: ["CREATE", "UPDATE"]
         resources: ["namespaces"]
-  # Only evaluate when the protected label changed between old and new object.
-  # Covers label addition, removal, and value modification.
+  # Only evaluate when the protected label is present on CREATE, or changed
+  # between old and new object on UPDATE. Covers: label set at creation, label
+  # addition, removal, and value modification.
   matchConditions:
     - name: protected-label-changed
       expression: >-
-        (has(object.metadata.labels) &&
-         'REPLACE_ME_LABEL_KEY' in object.metadata.labels &&
-         !(has(oldObject.metadata.labels) &&
-           'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
-           oldObject.metadata.labels['REPLACE_ME_LABEL_KEY'] ==
-           object.metadata.labels['REPLACE_ME_LABEL_KEY']))
+        (request.operation == "CREATE" &&
+         has(object.metadata.labels) &&
+         'REPLACE_ME_LABEL_KEY' in object.metadata.labels)
         ||
-        (has(oldObject.metadata.labels) &&
-         'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
-         !(has(object.metadata.labels) &&
-           'REPLACE_ME_LABEL_KEY' in object.metadata.labels))
+        (request.operation == "UPDATE" &&
+         ((has(object.metadata.labels) &&
+           'REPLACE_ME_LABEL_KEY' in object.metadata.labels &&
+           !(has(oldObject.metadata.labels) &&
+             'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
+             oldObject.metadata.labels['REPLACE_ME_LABEL_KEY'] ==
+             object.metadata.labels['REPLACE_ME_LABEL_KEY']))
+          ||
+          (has(oldObject.metadata.labels) &&
+           'REPLACE_ME_LABEL_KEY' in oldObject.metadata.labels &&
+           !(has(object.metadata.labels) &&
+             'REPLACE_ME_LABEL_KEY' in object.metadata.labels))))
   validations:
     # Only the designated admin ServiceAccount can modify the protected label.
     - expression: >-

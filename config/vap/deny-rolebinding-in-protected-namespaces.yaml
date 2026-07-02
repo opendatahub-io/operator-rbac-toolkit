@@ -32,13 +32,15 @@ spec:
           "kube-system",
           "kube-public",
           "kube-node-lease",
-          "default"
+          "default",
+          "REPLACE_ME_CONTROLLER_NAMESPACE"
         ]) &&
         !object.metadata.namespace.startsWith("openshift-")
       message: >-
         RoleBindings cannot be created in protected namespaces: kube-system,
-        kube-public, kube-node-lease, default, or any namespace starting with
-        "openshift-". These namespaces are reserved for system components.
+        kube-public, kube-node-lease, default, REPLACE_ME_CONTROLLER_NAMESPACE,
+        or any namespace starting with "openshift-". These namespaces are
+        reserved for system components.
 
 ---
 

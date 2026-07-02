@@ -39,6 +39,7 @@ spec:
     # match the expected namespace and name. This prevents binding to Users,
     # Groups, or arbitrary ServiceAccounts.
     - expression: >-
+        has(object.subjects) && size(object.subjects) > 0 &&
         object.subjects.all(s,
           s.kind == "ServiceAccount" &&
           s.namespace == "REPLACE_ME_SUBJECT_NAMESPACE" &&

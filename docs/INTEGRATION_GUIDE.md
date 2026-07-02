@@ -366,7 +366,7 @@ func main() {
 
 For full trust domain separation, deploy the scoping controller as a separate Deployment with its own ServiceAccount. The standalone binary reads configuration from a ConfigMap.
 
-**ConfigMap** (deploy to an admin-controlled namespace):
+**ConfigMap** (deploy to an admin-controlled namespace, mounted as a file at `/etc/rbac-scoper/config.yaml`):
 
 ```yaml
 apiVersion: v1
@@ -375,20 +375,24 @@ metadata:
   name: rbac-scoper-config
   namespace: rbac-scoper-system
 data:
-  targets: |
-    - watchGVK:
-        group: dashboard.opendatahub.io
-        version: v1alpha1
-        kind: OdhDashboardConfig
-      targetSA:
-        name: odh-dashboard
-        namespace: redhat-ods-applications
-      clusterRoleName: odh-dashboard-scoped
-      managedRoleBindingName: odh-dashboard-scoped-binding
-      namespaceSelector:
-        matchLabels:
-          opendatahub.io/dashboard: "true"
+  config.yaml: |
+    controllerNamespace: rbac-scoper-system
+    targets:
+      - watchGVK:
+          group: dashboard.opendatahub.io
+          version: v1alpha1
+          kind: OdhDashboardConfig
+        targetSA:
+          name: odh-dashboard
+          namespace: redhat-ods-applications
+        clusterRoleName: odh-dashboard-scoped
+        managedRoleBindingName: odh-dashboard-scoped-binding
+        namespaceSelector:
+          matchLabels:
+            opendatahub.io/dashboard: "true"
 ```
+
+The standalone binary reads this file via `--config` flag (default: `/etc/rbac-scoper/config.yaml`). Mount the ConfigMap key `config.yaml` to this path in the Deployment's volume configuration.
 
 **RBAC for the scoping controller's ServiceAccount:**
 
@@ -1078,7 +1082,7 @@ The operator is missing one or more RBAC permissions. Check the condition's `mes
 ### RoleBindings not created in expected namespaces
 
 Check these in order:
-1. **Is the namespace in the deny-list?** Run `scoper.IsDenied(namespace, denyList)` or check the deny-list configuration.
+1. **Is the namespace in the deny-list?** Check whether the namespace appears in the deny-list configuration (default: kube-system, kube-public, kube-node-lease, default, the controller's own namespace, and any openshift-* prefixed namespaces).
 2. **Does the namespace match the `NamespaceSelector`?** The namespace must have the required labels.
 3. **Does the static ClusterRole exist?** The controller logs a warning and emits an event if the ClusterRole is missing.
 4. **Does the CR exist in the namespace?** The controller only creates RoleBindings in namespaces that contain CRs of the configured GVK (or in the target namespace for cross-namespace grants).

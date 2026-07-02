@@ -38,9 +38,11 @@ spec:
     # serviceaccounts, userextras, uids). A wildcard verb on unrelated
     # resources (e.g., pods, configmaps) is not blocked by this policy.
     - expression: >-
+        !has(object.rules) ||
         object.rules.all(rule,
           !rule.verbs.exists(v, v == "impersonate") &&
           !(rule.verbs.exists(v, v == "*") &&
+            rule.apiGroups.exists(g, g in ["", "authentication.k8s.io", "*"]) &&
             rule.resources.exists(r, r in [
               "users", "groups", "serviceaccounts",
               "userextras", "uids", "*"

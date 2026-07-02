@@ -220,7 +220,6 @@ func (s *MyStatus) SetConditions(c []metav1.Condition) { s.Conditions = c }
 type MyReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
-    Recorder record.EventRecorder
     graceful *graceful.Handler
 }
 
@@ -278,7 +277,7 @@ ValidatingAdmissionPolicy templates for defense-in-depth. Deploy via Kustomize, 
 
 ## Standalone Scoper Binary
 
-The `cmd/scoper` directory contains a standalone binary for cluster admins who want to deploy the scoping controller as a separate Deployment rather than embedding `pkg/scoper` in an existing operator. It reads configuration from a ConfigMap, starts the controller with leader election, and manages RoleBindings independently from the operators it scopes.
+The `cmd/scoper` directory contains a standalone binary for cluster admins who want to deploy the scoping controller as a separate Deployment rather than embedding `pkg/scoper` in an existing operator. It reads configuration from a YAML file (typically mounted from a ConfigMap), starts the controller with leader election, and manages RoleBindings independently from the operators it scopes.
 
 Recommended deployment: 2 replicas with leader election enabled. The standalone binary runs with its own ServiceAccount, providing full trust domain separation from the operators it manages.
 

@@ -74,6 +74,10 @@ func main() {
 
 	restCfg := ctrl.GetConfigOrDie()
 
+	// Intentionally minimal scheme: only core/v1 and rbac/v1 are registered
+	// because the scoper only watches Namespaces, ServiceAccounts, RoleBindings,
+	// and ClusterRoles. Adding more types here is unnecessary unless new GVKs
+	// are introduced as watch targets.
 	scheme := runtime.NewScheme()
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(rbacv1.AddToScheme(scheme))
@@ -117,6 +121,10 @@ func loadConfig(path string) (scoper.Config, error) {
 
 // convertConfig transforms the YAML-friendly fileConfig into the typed scoper.Config.
 func convertConfig(fc fileConfig) (scoper.Config, error) {
+	if fc.ControllerNamespace == "" {
+		return scoper.Config{}, fmt.Errorf("controllerNamespace is required (empty value silently weakens the deny list)")
+	}
+
 	cfg := scoper.Config{
 		ControllerNamespace: fc.ControllerNamespace,
 		DenyList: scoper.DenyListConfig{
@@ -160,6 +168,12 @@ func convertConfig(fc fileConfig) (scoper.Config, error) {
 		}
 		if target.TargetSA.Name == "" || target.TargetSA.Namespace == "" {
 			return scoper.Config{}, fmt.Errorf("target %d: targetSA name and namespace are required", i)
+		}
+		if target.ClusterRoleName == "" {
+			return scoper.Config{}, fmt.Errorf("target %d: clusterRoleName is required", i)
+		}
+		if target.ManagedRoleBindingName == "" {
+			return scoper.Config{}, fmt.Errorf("target %d: managedRoleBindingName is required", i)
 		}
 
 		cfg.Targets = append(cfg.Targets, target)

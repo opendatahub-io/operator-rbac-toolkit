@@ -26,25 +26,30 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        operations: ["UPDATE"]
+        operations: ["CREATE", "UPDATE"]
         resources: ["namespaces"]
-  # Only evaluate when the rbac-allowed label actually changed between the old
-  # and new object. Covers three cases: label added, label removed, label value
-  # modified.
+  # Only evaluate when the rbac-allowed label is present on CREATE, or changed
+  # between old and new object on UPDATE. Covers: label set at creation, label
+  # added, label removed, label value modified.
   matchConditions:
     - name: rbac-allowed-label-changed
       expression: >-
-        (has(object.metadata.labels) &&
-         'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels &&
-         !(has(oldObject.metadata.labels) &&
-           'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
-           oldObject.metadata.labels['operator-rbac-toolkit.io/rbac-allowed'] ==
-           object.metadata.labels['operator-rbac-toolkit.io/rbac-allowed']))
+        (request.operation == "CREATE" &&
+         has(object.metadata.labels) &&
+         'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels)
         ||
-        (has(oldObject.metadata.labels) &&
-         'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
-         !(has(object.metadata.labels) &&
-           'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels))
+        (request.operation == "UPDATE" &&
+         ((has(object.metadata.labels) &&
+           'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels &&
+           !(has(oldObject.metadata.labels) &&
+             'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
+             oldObject.metadata.labels['operator-rbac-toolkit.io/rbac-allowed'] ==
+             object.metadata.labels['operator-rbac-toolkit.io/rbac-allowed']))
+          ||
+          (has(oldObject.metadata.labels) &&
+           'operator-rbac-toolkit.io/rbac-allowed' in oldObject.metadata.labels &&
+           !(has(object.metadata.labels) &&
+             'operator-rbac-toolkit.io/rbac-allowed' in object.metadata.labels))))
   validations:
     # Only the designated admin ServiceAccount can add, modify, or remove this
     # label. Update the placeholder with your admin SA username.
