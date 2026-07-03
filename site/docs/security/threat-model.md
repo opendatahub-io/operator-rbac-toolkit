@@ -64,27 +64,6 @@ flowchart TB
     style op fill:#e8f4fd,stroke:#2196F3
 ```
 
-```
-+------------------------------------------+
-|          Cluster Admin Trust Domain       |
-|                                          |
-|  - Static ClusterRole (defines ceiling)  |
-|  - Scoping Controller SA                 |
-|  - VAP Templates                         |
-|  - Impersonation Guard                   |
-+------------------------------------------+
-          |
-          | Creates/manages RoleBindings
-          v
-+------------------------------------------+
-|          Operator Trust Domain            |
-|                                          |
-|  - Operator SA (RBAC consumer)           |
-|  - Graceful Degradation Library          |
-|  - Application logic                     |
-+------------------------------------------+
-```
-
 A compromise in the operator trust domain cannot escalate into the admin trust domain because:
 
 - The operator SA has no RBAC write verbs.
@@ -96,15 +75,18 @@ A compromise in the operator trust domain cannot escalate into the admin trust d
 
 When the scoping controller is embedded in a platform operator, the trust boundary is collapsed:
 
-```
-+------------------------------------------+
-|   Platform Operator Trust Domain          |
-|   (combines admin and operator concerns)  |
-|                                          |
-|  - Platform SA (shared)                  |
-|  - Scoping logic (bind verb)             |
-|  - Application logic                     |
-+------------------------------------------+
+```mermaid
+flowchart TB
+    subgraph combined ["Platform Operator Trust Domain (collapsed)"]
+        PSA["Platform SA (shared)"]
+        SL["Scoping Logic (bind verb)"]
+        AL["Application Logic"]
+    end
+
+    PSA -->|single compromise grants| SL
+    PSA -->|single compromise grants| AL
+
+    style combined fill:#fff3e0,stroke:#FF9800
 ```
 
 In this mode, compromising the platform operator SA grants the attacker both operator capabilities AND the `bind` verb for scoped ClusterRoles. The attacker can create RoleBindings in any namespace (bounded by namespace selector and VAPs).

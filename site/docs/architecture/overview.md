@@ -99,28 +99,28 @@ The graceful degradation library requires zero RBAC verbs, no webhooks, no CRDs,
 
 The toolkit is split into three independent components, each with a clear owner:
 
-```
-Operator Author                       Cluster Admin
-     |                                     |
-     v                                     v
-+---------------------------+   +--------------------------------+
-|  Graceful Degradation     |   |  RBAC Scoping Controller       |
-|  Library (pkg/graceful)   |   |  (pkg/scoper + cmd/scoper)     |
-|                           |   |                                |
-|  - Handle Forbidden       |   |  - Watch CRs                  |
-|  - Surface status         |   |  - Create RoleBindings         |
-|  - Report permissions     |   |  - Garbage collect on CR       |
-|  - Emit events            |   |    deletion                    |
-|                           |   |  - Standalone binary OR        |
-|  Zero RBAC verbs needed   |   |    importable package          |
-+---------------------------+   +--------------------------------+
-                                |  Defense-in-Depth Toolkit       |
-                                |                                |
-                                |  - RBAC Audit (pkg/audit)      |
-                                |  - SA Protection (webhook)     |
-                                |  - Impersonation Guard         |
-                                |  - VAP Templates               |
-                                +--------------------------------+
+```mermaid
+flowchart TB
+    subgraph operator ["Operator Trust Domain (operator author)"]
+        OL["Graceful Degradation Library\n(pkg/graceful)"]
+        OA["Application Logic"]
+        OS["Operator SA\nzero RBAC write verbs"]
+    end
+
+    subgraph admin ["Cluster Admin Trust Domain"]
+        SC["RBAC Scoping Controller\n(pkg/scoper + cmd/scoper)"]
+        SP["SA Protection Webhook\n(pkg/saprotection)"]
+        IG["Impersonation Guard\n(pkg/impersonation)"]
+        AU["RBAC Audit (pkg/audit)"]
+        VA["12 VAP Templates"]
+        SR["Static ClusterRole\n(permission ceiling)"]
+    end
+
+    SC -->|creates namespace-scoped\nRoleBindings| OS
+    SR -.->|ceiling enforced\nby K8s RBAC| SC
+
+    style operator fill:#e8f4fd,stroke:#2196F3
+    style admin fill:#f3e5f5,stroke:#9C27B0
 ```
 
 ### Component Interaction Model

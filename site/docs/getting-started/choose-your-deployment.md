@@ -49,15 +49,18 @@ Platform operators import `pkg/scoper` and call `scoper.Setup()` in their existi
 
 When the scoping controller is embedded in a platform operator, it shares that operator's ServiceAccount. This collapses the trust domain separation.
 
-```
-+------------------------------------------+
-|   Platform Operator Trust Domain          |
-|   (combines admin and operator concerns)  |
-|                                          |
-|  - Platform SA (shared)                  |
-|  - Scoping logic (bind verb)             |
-|  - Application logic                     |
-+------------------------------------------+
+```mermaid
+flowchart TB
+    subgraph combined ["Platform Operator Trust Domain (collapsed)"]
+        PSA["Platform SA (shared)"]
+        SL["Scoping Logic (bind verb)"]
+        AL["Application Logic"]
+    end
+
+    PSA -->|single compromise grants| SL
+    PSA -->|single compromise grants| AL
+
+    style combined fill:#fff3e0,stroke:#FF9800
 ```
 
 In this mode, compromising the platform operator SA grants the attacker both operator capabilities AND the `bind` verb for scoped ClusterRoles. The attacker can create RoleBindings in any namespace (bounded by namespace selector and VAPs).

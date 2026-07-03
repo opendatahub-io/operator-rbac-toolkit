@@ -49,34 +49,7 @@ flowchart TB
     style admin fill:#f3e5f5,stroke:#9C27B0
 ```
 
-```
-Operator Author                          Cluster Admin
-     |                                        |
-     v                                        v
-+------------------------------+   +----------------------------------+
-|  Graceful Degradation        |   |  RBAC Scoping Controller         |
-|  Library (pkg/graceful)      |   |  (pkg/scoper + cmd/scoper)       |
-|                              |   |                                  |
-|  - Handle Forbidden errors   |   |  - Watch CRs                    |
-|  - Set status conditions     |   |  - Create RoleBindings           |
-|  - Discover permissions      |   |  - Garbage collect on CR delete  |
-|  - Emit K8s events           |   |  - Standalone binary OR          |
-|                              |   |    importable Go package         |
-|  Zero RBAC write verbs       |   |                                  |
-+------------------------------+   +----------------------------------+
-                                   |  Defense-in-Depth Toolkit         |
-                                   |                                  |
-                                   |  - RBAC Audit (pkg/audit)        |
-                                   |  - SA Protection (webhook)       |
-                                   |  - Impersonation Guard           |
-                                   |  - 12 VAP Templates              |
-                                   +----------------------------------+
-
-Trust boundary:
-  Operator SA  ------>  RBAC consumer (read-only, no escalate/bind)
-  Scoper SA   ------>  RBAC manager  (bind on specific ClusterRoles)
-  Compromise of operator SA cannot escalate into admin trust domain.
-```
+**Trust boundary:** The operator SA is a pure RBAC consumer (zero write verbs). The scoper SA manages RoleBindings via `bind` on specific ClusterRoles only. Compromise of the operator SA cannot escalate into the admin trust domain.
 
 ## Quick Start
 
