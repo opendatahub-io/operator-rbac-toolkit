@@ -331,7 +331,7 @@ The `ScopingTarget` configuration is the same for all three versions. The only d
 
 The scoping controller requires no Dashboard changes. Dashboard gets namespace-scoped permissions instead of cluster-wide, and the existing error handling covers any transient 403s during RoleBinding provisioning.
 
-## What Andrew Asked For
+## Alignment with the RHOAIENG-69306 Proposal
 
 From the RHOAIENG-69306 proposal:
 
