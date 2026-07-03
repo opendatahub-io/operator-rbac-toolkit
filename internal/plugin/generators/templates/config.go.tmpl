@@ -1,0 +1,59 @@
+// Edit this file to configure your security policy.
+// This file is user-owned and will never be overwritten by the plugin.
+package security
+
+import (
+	"k8s.io/apimachinery/pkg/types"
+{{- if .SAProtection }}
+	"github.com/ugiordan/operator-rbac-toolkit/pkg/saprotection"
+{{- end }}
+{{- if .RBACAudit }}
+	"github.com/ugiordan/operator-rbac-toolkit/pkg/audit"
+{{- end }}
+)
+
+// OperatorName is the name of this operator, used for resource naming.
+const OperatorName = "{{ .OperatorName }}"
+
+// ServiceAccountRef returns the operator's ServiceAccount as a NamespacedName.
+func ServiceAccountRef() types.NamespacedName {
+	return types.NamespacedName{
+		Name:      "{{ .SAName }}",
+		Namespace: "{{ .SANamespace }}",
+	}
+}
+{{- if .SAProtection }}
+
+// WebhookConfig returns the SA protection webhook configuration.
+func WebhookConfig() saprotection.WebhookConfig {
+	return saprotection.WebhookConfig{
+		ProtectedServiceAccounts: []string{
+			"{{ .SAName }}",
+		},
+		AllowedIdentities: []string{
+			// Add identities allowed to mutate pods using the protected SA.
+			// Example: "system:serviceaccount:{{ .SANamespace }}:{{ .SAName }}"
+		},
+	}
+}
+{{- end }}
+{{- if .RBACAudit }}
+
+// AuditConfig returns the RBAC audit configuration.
+// Adjust ExpectedRules to match the minimum RBAC your operator needs.
+func AuditConfig() audit.Config {
+	return audit.Config{
+		ServiceAccount: ServiceAccountRef(),
+		// ExpectedRules should list the minimum RBAC rules your operator requires.
+		// The audit scanner compares actual ClusterRole/Role bindings against these
+		// to detect unused permissions.
+{{- if .ExistingRBACRules }}
+		// Rules found in your config/rbac/role.yaml (review and trim to minimum):
+{{- range .ExistingRBACRules }}
+{{ . | commentBlock }}
+{{- end }}
+{{- end }}
+		ExpectedRules: nil, // TODO: populate with your actual required PolicyRules
+	}
+}
+{{- end }}

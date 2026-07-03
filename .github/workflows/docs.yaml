@@ -1,0 +1,45 @@
+name: Deploy Docs
+
+# Disabled while repo is private (GitHub Pages requires public repo on free plans).
+# Uncomment the triggers below when the repo becomes public.
+# on:
+#   workflow_dispatch:
+#   push:
+#     branches: [main]
+#     paths:
+#       - 'site/**'
+#       - 'README.md'
+
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install MkDocs dependencies
+        run: pip install -r site/requirements.txt
+
+      - name: Build site
+        working-directory: site
+        run: mkdocs build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site/site
+          force_orphan: true

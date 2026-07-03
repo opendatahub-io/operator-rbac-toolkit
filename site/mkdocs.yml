@@ -1,0 +1,101 @@
+site_name: Operator RBAC Toolkit
+site_url: https://ugiordan.github.io/operator-rbac-toolkit
+repo_url: https://github.com/ugiordan/operator-rbac-toolkit
+repo_name: ugiordan/operator-rbac-toolkit
+edit_uri: edit/main/site/docs/
+copyright: Copyright &copy; Red Hat, Inc.
+theme:
+  name: material
+  language: en
+  favicon: images/favicon.ico
+  logo: images/logo.png
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Red Hat Text
+    code: Red Hat Mono
+  palette:
+    - scheme: default
+      primary: black
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+      media: "(prefers-color-scheme: light)"
+    - scheme: slate
+      primary: black
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+      media: "(prefers-color-scheme: dark)"
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.path
+    - navigation.instant
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+extra_css:
+  - stylesheets/extra.css
+plugins:
+  - search
+  - git-revision-date-localized:
+      enable_creation_date: true
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick-start.md
+    - Choose Your Deployment: getting-started/choose-your-deployment.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Graceful Degradation: architecture/graceful-degradation.md
+    - RBAC Scoping: architecture/rbac-scoping.md
+    - SA Protection: architecture/sa-protection.md
+    - Impersonation Guard: architecture/impersonation-guard.md
+    - RBAC Audit: architecture/rbac-audit.md
+  - Security:
+    - Threat Model: security/threat-model.md
+    - VAP Templates: security/vap-templates.md
+  - Integration Guide:
+    - Graceful Degradation: integration/graceful-degradation.md
+    - RBAC Scoping: integration/rbac-scoping.md
+    - SA Protection: integration/sa-protection.md
+    - Impersonation Guard: integration/impersonation-guard.md
+    - RBAC Audit: integration/rbac-audit.md
+    - Configuration: integration/configuration.md
+    - Migration: integration/migration.md
+    - Troubleshooting: integration/troubleshooting.md
+  - Design:
+    - Tradeoffs: design/tradeoffs.md
+  - Performance:
+    - Results: performance/results.md
+  - Reference:
+    - Kubernetes Compatibility: reference/kubernetes-compatibility.md
