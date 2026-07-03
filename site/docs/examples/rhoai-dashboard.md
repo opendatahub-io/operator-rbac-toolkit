@@ -9,10 +9,11 @@ An audit of the RHOAI Dashboard's `odh-dashboard` ServiceAccount ClusterRole fou
 | Verdict | Count | Description |
 |---------|-------|-------------|
 | UNUSED (remove entirely) | 9 | Permissions for removed features, wrong resource types, or never-implemented API calls |
-| USER-TOKEN-ONLY (remove) | 1.5 | Resources accessed via user-token passthrough, not the SA |
+| USER-TOKEN-ONLY (remove) | 2 | Resources accessed via user-token passthrough, not the SA (1 full rule + 1 partial, counted as 2) |
 | OVER-PERMISSIONED (reduce verbs) | 14 | Rules granting `[get, list, watch, create, update, patch, delete]` when only `[list]` is needed |
 | Correctly scoped | 2 | Only `namespaces/patch` and `auths/get` |
-| REDUNDANT | 1 | Already covered by `system:auth-delegator` |
+| REDUNDANT (remove) | 2 | Already covered by `system:auth-delegator` |
+| **Needs scoping** | **1** | Rule 7 (configmaps, PVCs, secrets) needs namespace scoping, not removal |
 
 The `watch` verb was granted on nearly every resource but never used (the backend polls with `setInterval` + `list`, not the Kubernetes watch API).
 
@@ -32,7 +33,7 @@ The toolkit solves this by splitting the responsibility:
 flowchart TB
     subgraph rhoai ["RHOAI Operator (existing, already runs)"]
         SC["Scoping Controller\n(embedded pkg/scoper)"]
-        DSC["DSC/DSCI Reconciler\n(knows namespace locations)"]
+        DSC["DSC/DSCI Reconciler\n(provides namespace config)"]
     end
 
     subgraph dashboard ["Dashboard Operator"]
@@ -119,7 +120,9 @@ Permissions for cluster-scoped resources (CSVs, DSCs, DSCIs, routes, consolelink
 
 ## Step 2: Configure the Scoping Controller
 
-Embed `pkg/scoper` in the RHOAI operator. The RHOAI operator already reconciles `DataScienceCluster` (DSC) and knows the notebooks and model registry namespaces from the DSC spec.
+Embed `pkg/scoper` in the RHOAI operator. The scoping controller watches for `OdhDashboardConfig` CRs (namespaced, created in the Dashboard's namespace) and creates RoleBindings in the target namespaces.
+
+The first target creates a same-namespace RoleBinding (Dashboard needs core permissions in its own namespace). The second and third targets use `TargetNamespaceSource` to create cross-namespace RoleBindings in the notebooks and model registry namespaces.
 
 ```go
 import "github.com/ugiordan/operator-rbac-toolkit/pkg/scoper"
@@ -129,12 +132,27 @@ func setupScoper(mgr ctrl.Manager) error {
         ControllerNamespace: "redhat-ods-operator",
         Targets: []scoper.ScopingTarget{
             {
-                // When an OdhDashboardConfig CR exists, create a RoleBinding
-                // in the notebooks namespace granting Dashboard SA access
+                // Same-namespace: Dashboard permissions in its own namespace
+                // Uses OwnerReference GC (automatic cleanup when CR is deleted)
                 WatchGVK: schema.GroupVersionKind{
                     Group:   "opendatahub.io",
-                    Version: "v1",
-                    Kind:    "DataScienceCluster",
+                    Version: "v1alpha1",
+                    Kind:    "OdhDashboardConfig",
+                },
+                TargetSA: types.NamespacedName{
+                    Name:      "odh-dashboard",
+                    Namespace: "redhat-ods-applications",
+                },
+                ClusterRoleName:        "odh-dashboard-core",
+                ManagedRoleBindingName: "odh-dashboard-core-binding",
+            },
+            {
+                // Cross-namespace: notebooks namespace permissions
+                // Uses annotation-based ownership (periodic cleanup)
+                WatchGVK: schema.GroupVersionKind{
+                    Group:   "opendatahub.io",
+                    Version: "v1alpha1",
+                    Kind:    "OdhDashboardConfig",
                 },
                 TargetSA: types.NamespacedName{
                     Name:      "odh-dashboard",
@@ -143,18 +161,15 @@ func setupScoper(mgr ctrl.Manager) error {
                 ClusterRoleName:        "odh-dashboard-notebooks",
                 ManagedRoleBindingName: "odh-dashboard-notebooks-binding",
                 TargetNamespaceSource: &scoper.NamespaceSource{
-                    FieldPath: ".spec.components.kueue.managementState",
-                    // In practice, this would be the field path to the
-                    // notebooks namespace in the DSC spec, e.g.:
-                    // ".spec.notebookController.notebookNamespace"
+                    FieldPath: ".spec.notebookController.notebookNamespace",
                 },
             },
             {
-                // Same pattern for model registry namespace
+                // Cross-namespace: model registry namespace permissions
                 WatchGVK: schema.GroupVersionKind{
                     Group:   "opendatahub.io",
-                    Version: "v1",
-                    Kind:    "DataScienceCluster",
+                    Version: "v1alpha1",
+                    Kind:    "OdhDashboardConfig",
                 },
                 TargetSA: types.NamespacedName{
                     Name:      "odh-dashboard",
@@ -163,7 +178,7 @@ func setupScoper(mgr ctrl.Manager) error {
                 ClusterRoleName:        "odh-dashboard-modelregistry",
                 ManagedRoleBindingName: "odh-dashboard-modelregistry-binding",
                 TargetNamespaceSource: &scoper.NamespaceSource{
-                    FieldPath: ".spec.components.modelregistry.registriesNamespace",
+                    FieldPath: ".spec.modelRegistryNamespace",
                 },
             },
         },
@@ -171,37 +186,57 @@ func setupScoper(mgr ctrl.Manager) error {
 }
 ```
 
-When the DSC is reconciled, the scoping controller automatically creates:
+When the `OdhDashboardConfig` CR is reconciled, the scoping controller automatically creates:
 
-- `odh-dashboard-notebooks-binding` RoleBinding in the notebooks namespace
-- `odh-dashboard-modelregistry-binding` RoleBinding in the model registry namespace
-
-Both reference their respective static ClusterRoles and bind to the `odh-dashboard` SA. When the DSC is deleted, the RoleBindings are garbage collected.
+- `odh-dashboard-core-binding` RoleBinding in the Dashboard's own namespace (OwnerReference GC, automatic cleanup)
+- `odh-dashboard-notebooks-binding` RoleBinding in the notebooks namespace (annotation-based ownership, cleaned up by periodic reconciler within 5 minutes of CR deletion)
+- `odh-dashboard-modelregistry-binding` RoleBinding in the model registry namespace (same as notebooks)
 
 ## Step 3: Add Graceful Degradation to Dashboard
 
-The Dashboard backend (TypeScript + Go BFFs) can integrate the graceful degradation library to handle permission transitions cleanly. For the TypeScript backend, this means catching `Forbidden` responses and surfacing them via the Dashboard UI. For the Go BFFs, `pkg/graceful` wraps the client calls:
+If any component that reconciles Dashboard resources is built with controller-runtime, integrate the graceful degradation library to handle permission transitions cleanly. For the TypeScript backend, this means catching `Forbidden` HTTP responses and surfacing them via the Dashboard UI.
+
+For a controller-runtime reconciler that manages Dashboard resources:
 
 ```go
 import "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
 
-// In a Go BFF service that accesses secrets in the model registry namespace
-handler := graceful.NewHandler(recorder)
+type DashboardReconciler struct {
+    client.Client
+    Scheme   *runtime.Scheme
+    graceful *graceful.Handler
+}
 
-func (s *ModelRegistryService) ListSecrets(ctx context.Context, namespace string) (*corev1.SecretList, error) {
+func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    r.graceful = graceful.NewHandler(mgr.GetEventRecorderFor("odh-dashboard"))
+    return ctrl.NewControllerManagedBy(mgr).
+        For(&v1alpha1.OdhDashboardConfig{}).
+        Complete(r)
+}
+
+func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    cr := &v1alpha1.OdhDashboardConfig{}
+    if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+
+    // Access secrets in the notebooks namespace.
+    // If the RoleBinding hasn't been created yet (scoping controller
+    // hasn't reconciled), this returns Forbidden. The handler sets
+    // PermissionGranted=False on the CR status and requeues with backoff.
     secrets := &corev1.SecretList{}
-    result, err := handler.Do(ctx, s.Client, cr, func() error {
-        return s.Client.List(ctx, secrets, client.InNamespace(namespace))
+    result, err := r.graceful.Do(ctx, r.Client, cr, func() error {
+        return r.List(ctx, secrets, client.InNamespace(cr.Spec.NotebookNamespace))
     })
     if err != nil {
-        return nil, err
+        return result, err
     }
     if result.RequeueAfter > 0 {
-        // Permission not yet available (RoleBinding not created yet)
-        // Return a structured error the frontend can display
-        return nil, &PermissionPendingError{Namespace: namespace}
+        return result, nil
     }
-    return secrets, nil
+
+    // Permission granted, proceed normally
+    return ctrl.Result{}, nil
 }
 ```
 
@@ -268,12 +303,12 @@ kubectl get secrets -A --token=$TOKEN
 
 | Metric | Before | After |
 |--------|--------|-------|
-| ClusterRole rules | 30 | ~17 (removed 9 unused + 4 moved to scoped) |
+| ClusterRole rules | 30 | ~17 (9 unused removed, 2 user-token-only removed, 2 redundant removed, scoped permissions moved to namespace-level) |
 | Namespaces with secret access | All (including kube-system) | 2 (notebooks + model-registry) |
 | Secrets accessible in kube-system | 43 | 0 (Forbidden) |
 | Total blast radius | Entire cluster | Confined to CR-bearing namespaces |
 | Operator manages its own RBAC | No | No |
-| Admin action required | None (existing RHOAI operator handles it) | None (embedded in RHOAI operator) |
+| Ongoing admin RBAC maintenance | Manual (track permission drift) | Automated (scoping controller manages RoleBindings) |
 
 The Dashboard continues to function identically. The only change is that a compromised SA token can no longer access resources outside the namespaces where access is actually needed.
 
