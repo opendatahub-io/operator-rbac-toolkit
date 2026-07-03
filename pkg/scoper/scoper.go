@@ -3,6 +3,7 @@ package scoper
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -112,6 +113,16 @@ func validateTarget(t ScopingTarget) error {
 	}
 	if t.ManagedRoleBindingName == "" {
 		return fmt.Errorf("ManagedRoleBindingName is required")
+	}
+	if t.TargetNamespaceSource != nil {
+		fp := t.TargetNamespaceSource.FieldPath
+		normalized := fp
+		if strings.HasPrefix(normalized, ".") {
+			normalized = normalized[1:]
+		}
+		if !strings.HasPrefix(normalized, "spec.") {
+			return fmt.Errorf("TargetNamespaceSource.FieldPath must start with \".spec.\" to prevent reading user-controlled fields, got %q", fp)
+		}
 	}
 	return nil
 }

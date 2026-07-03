@@ -6,8 +6,10 @@
 # scopes RBAC into, or change the ClusterRole references, effectively
 # escalating privileges.
 #
-# Only the designated admin ServiceAccount and the scoping controller's own
-# ServiceAccount are allowed to update or delete this ConfigMap.
+# Only the designated admin ServiceAccount is allowed to update or delete this
+# ConfigMap. The scoping controller reads its configuration from a mounted
+# file, not the Kubernetes API, so it does not need write access to the
+# ConfigMap.
 #
 # CUSTOMIZATION:
 #   - Replace REPLACE_ME_CONFIGMAP_NAME with the name of the scoper's ConfigMap
@@ -16,9 +18,6 @@
 #     (e.g., "operator-rbac-toolkit-system").
 #   - Replace REPLACE_ME_ADMIN_SA with the full admin ServiceAccount username
 #     (format: "system:serviceaccount:<namespace>:<name>").
-#   - Replace REPLACE_ME_SCOPER_SA with the full scoper controller
-#     ServiceAccount username (format:
-#     "system:serviceaccount:<namespace>:<name>").
 
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -47,15 +46,15 @@ spec:
          oldObject.metadata.name == 'REPLACE_ME_CONFIGMAP_NAME' &&
          oldObject.metadata.namespace == 'REPLACE_ME_NAMESPACE')
   validations:
-    # Only the admin SA or the scoper controller SA can update or delete this
-    # ConfigMap. All other principals are denied.
+    # Only the admin SA can update or delete this ConfigMap. The scoping
+    # controller reads from a mounted file and does not need API write access.
+    # All other principals are denied.
     - expression: >-
-        request.userInfo.username == "REPLACE_ME_ADMIN_SA" ||
-        request.userInfo.username == "REPLACE_ME_SCOPER_SA"
+        request.userInfo.username == "REPLACE_ME_ADMIN_SA"
       messageExpression: >-
         "The ConfigMap 'REPLACE_ME_CONFIGMAP_NAME' in namespace " +
         "'REPLACE_ME_NAMESPACE' is protected. Only the admin ServiceAccount " +
-        "or the scoper controller ServiceAccount can modify or delete it. " +
+        "can modify or delete it. " +
         "Requesting user '" + request.userInfo.username + "' is not authorized."
 
 ---

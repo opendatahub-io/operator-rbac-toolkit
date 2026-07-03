@@ -7,6 +7,11 @@
 # Without this policy, any principal with rolebinding-create permission could
 # forge a managed RoleBinding and bypass the scoping controller entirely.
 #
+# SCOPE: This VAP only protects RoleBindings that carry the
+# operator-rbac-toolkit.io/scoped-access-owners annotation. It does not prevent
+# the operator SA from creating non-annotated RoleBindings. The operator SA
+# should not have create rolebindings permission by design (principle 2.2).
+#
 # CUSTOMIZATION:
 #   - Replace REPLACE_ME_NAMESPACE with the namespace where the scoping
 #     controller runs (e.g., "operator-rbac-toolkit-system").

@@ -121,13 +121,15 @@ func (r *ScopingReconciler) ensureRoleBinding(ctx context.Context, cr *unstructu
 	}
 
 	if r.isSameNamespace(cr, targetNamespace) {
-		// Re-fetch after drift correction since ensureRoleBindingSpec may have
-		// deleted and recreated the RoleBinding (RoleRef is immutable).
-		fresh := &rbacv1.RoleBinding{}
-		if err := r.Get(ctx, rbName, fresh); err != nil {
-			return err
-		}
-		return r.ensureOwnerReference(ctx, cr, fresh)
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			// Re-fetch after drift correction since ensureRoleBindingSpec may have
+			// deleted and recreated the RoleBinding (RoleRef is immutable).
+			fresh := &rbacv1.RoleBinding{}
+			if err := r.Get(ctx, rbName, fresh); err != nil {
+				return err
+			}
+			return r.ensureOwnerReference(ctx, cr, fresh)
+		})
 	}
 
 	// CRITICAL 1: wrap annotation update in retry-on-conflict
@@ -190,10 +192,16 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 			return fmt.Errorf("deleting drifted RoleBinding: %w", err)
 		}
 		// Recreate with correct spec (preserving annotations/owner references)
+		recreatedLabels := existing.Labels
+		if recreatedLabels == nil {
+			recreatedLabels = make(map[string]string)
+		}
+		recreatedLabels[ManagedLabelKey] = ManagedLabelValue
 		recreated := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            existing.Name,
 				Namespace:       existing.Namespace,
+				Labels:          recreatedLabels,
 				Annotations:     existing.Annotations,
 				OwnerReferences: existing.OwnerReferences,
 			},
@@ -216,6 +224,9 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.Target.ManagedRoleBindingName,
 			Namespace: targetNamespace,
+			Labels: map[string]string{
+				ManagedLabelKey: ManagedLabelValue,
+			},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,

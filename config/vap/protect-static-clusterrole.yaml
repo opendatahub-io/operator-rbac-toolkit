@@ -31,8 +31,9 @@ spec:
         operations: ["UPDATE", "DELETE"]
         resources: ["clusterroles"]
   # Only evaluate when the target ClusterRole matches the protected name.
-  # For UPDATE, check object.metadata.name; for DELETE, check
-  # oldObject.metadata.name since the object may not be fully populated.
+  # For UPDATE, check object.metadata.name. For DELETE, both object and
+  # oldObject are available; oldObject is used for consistency with other
+  # VAP templates in this toolkit.
   matchConditions:
     - name: is-protected-clusterrole
       expression: >-

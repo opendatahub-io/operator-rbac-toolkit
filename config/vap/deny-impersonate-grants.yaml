@@ -37,6 +37,12 @@ spec:
     # combined with impersonation-relevant resources (users, groups,
     # serviceaccounts, userextras, uids). A wildcard verb on unrelated
     # resources (e.g., pods, configmaps) is not blocked by this policy.
+    #
+    # Potential false positive: a rule with wildcard resources ("*") in the
+    # authentication.k8s.io apiGroup will trigger this policy even if the
+    # intent is not impersonation. This is acceptable because such broad
+    # grants over the authentication API group should be reviewed anyway,
+    # and legitimate use cases for wildcard resources in that group are rare.
     - expression: >-
         !has(object.rules) ||
         object.rules.all(rule,

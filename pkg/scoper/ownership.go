@@ -47,7 +47,14 @@ func FormatOwnerAnnotation(entries []OwnerEntry) string {
 	return strings.Join(parts, ",")
 }
 
+// AddOwnerEntry appends a new OwnerEntry if its UID is not already present.
+// Entries whose Namespace or Name contain "/" or "," are skipped because those
+// characters are used as delimiters in the serialized annotation format and
+// would corrupt parsing.
 func AddOwnerEntry(entries []OwnerEntry, entry OwnerEntry) []OwnerEntry {
+	if strings.ContainsAny(entry.Namespace, "/,") || strings.ContainsAny(entry.Name, "/,") {
+		return entries
+	}
 	for _, e := range entries {
 		if e.UID == entry.UID {
 			return entries

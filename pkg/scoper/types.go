@@ -49,4 +49,10 @@ func DefaultDenyList(controllerNamespace string) DenyListConfig {
 
 const (
 	OwnerAnnotationKey = "operator-rbac-toolkit.io/scoped-access-owners"
+
+	// ManagedLabelKey is applied to RoleBindings created by the scoper so
+	// cleanup can list only managed resources instead of every RoleBinding
+	// in the cluster.
+	ManagedLabelKey   = "operator-rbac-toolkit.io/managed"
+	ManagedLabelValue = "true"
 )

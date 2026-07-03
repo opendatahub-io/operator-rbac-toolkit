@@ -33,6 +33,24 @@ func (t *testCR) SetConditions(c []metav1.Condition)      { t.Status.Conditions 
 func (t *testCR) DeepCopyObject() runtime.Object          { return t.deepCopy() }
 func (t *testCR) GetObjectKind() schema.ObjectKind        { return &t.TypeMeta }
 
+// testCRList is required for fake client scheme registration.
+type testCRList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []testCR `json:"items"`
+}
+
+func (l *testCRList) DeepCopyObject() runtime.Object {
+	out := *l
+	if l.Items != nil {
+		out.Items = make([]testCR, len(l.Items))
+		for i := range l.Items {
+			out.Items[i] = *l.Items[i].deepCopy()
+		}
+	}
+	return &out
+}
+
 func (t *testCR) deepCopy() *testCR {
 	out := *t
 	out.ObjectMeta = *t.ObjectMeta.DeepCopy()
@@ -185,7 +203,32 @@ func TestDo_ForbiddenError_SetsConditionsAndEvents(t *testing.T) {
 		fmt.Errorf("user cannot list secrets in namespace \"kube-system\""),
 	)
 
-	result, err := handler.Do(context.Background(), nil, cr, func() error {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	// Re-fetch the CR from the fake client so that resource version is populated,
+	// matching what the status update path expects.
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR from fake client: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
 		return forbiddenErr
 	})
 	if err != nil {
@@ -195,7 +238,7 @@ func TestDo_ForbiddenError_SetsConditionsAndEvents(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
 	}
 
-	pg := findCondition(cr, ConditionTypePermissionGranted)
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
 	if pg == nil {
 		t.Fatal("PermissionGranted condition not set after Forbidden error")
 	}
@@ -203,7 +246,7 @@ func TestDo_ForbiddenError_SetsConditionsAndEvents(t *testing.T) {
 		t.Errorf("PermissionGranted = %s, want False", pg.Status)
 	}
 
-	deg := findCondition(cr, ConditionTypeDegraded)
+	deg := findCondition(fetchedCR, ConditionTypeDegraded)
 	if deg == nil {
 		t.Fatal("Degraded condition not set after Forbidden error")
 	}

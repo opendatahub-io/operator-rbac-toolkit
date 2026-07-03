@@ -57,11 +57,32 @@ func (w *SAProtectionWebhook) Handle(ctx context.Context, req admission.Request)
 		if err := w.decoder.DecodeRaw(req.OldObject, oldPod); err != nil {
 			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("failed to decode old pod: %w", err))
 		}
-		if serviceAccountName(pod) == serviceAccountName(oldPod) {
+		oldSA := serviceAccountName(oldPod)
+		newSA := serviceAccountName(pod)
+
+		// SA unchanged: nothing to protect.
+		if newSA == oldSA {
 			return admission.Allowed("")
 		}
+
+		// If EITHER the old or new SA is protected, require an allowed identity.
+		// Checking both directions prevents an unauthorized user from both
+		// assigning a protected SA (privilege escalation) and removing a
+		// protected SA (stripping security context).
+		if w.isProtected(oldSA) || w.isProtected(newSA) {
+			if !w.isAllowed(req.UserInfo.Username) {
+				protectedName := newSA
+				if w.isProtected(oldSA) {
+					protectedName = oldSA
+				}
+				return admission.Denied(fmt.Sprintf("ServiceAccount %s is protected", protectedName))
+			}
+		}
+
+		return admission.Allowed("")
 	}
 
+	// CREATE path: only check the new SA.
 	saName := serviceAccountName(pod)
 	if !w.isProtected(saName) {
 		return admission.Allowed("")

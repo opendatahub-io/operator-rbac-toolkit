@@ -131,6 +131,7 @@ err := scoper.Setup(mgr, scoper.Config{
             NamespaceSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{"managed": "true"}},
         },
     },
+    ControllerNamespace: "scoper-system",
     DenyList: scoper.DefaultDenyList("scoper-system"),
     CleanupInterval: metav1.Duration{Duration: 5 * time.Minute},
 })

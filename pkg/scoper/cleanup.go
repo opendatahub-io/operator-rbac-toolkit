@@ -55,7 +55,7 @@ func (r *CleanupReconciler) runCleanup(ctx context.Context) {
 
 func (r *CleanupReconciler) listAndCleanup(ctx context.Context, target ScopingTarget) error {
 	rbList := &rbacv1.RoleBindingList{}
-	if err := r.List(ctx, rbList); err != nil {
+	if err := r.List(ctx, rbList, client.MatchingLabels{ManagedLabelKey: ManagedLabelValue}); err != nil {
 		return err
 	}
 	for _, rb := range rbList.Items {

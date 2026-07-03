@@ -1,10 +1,15 @@
 # deny-rolebinding-in-protected-namespaces.yaml
 #
-# PURPOSE: Blocks RoleBinding creation in sensitive system namespaces. The
-# deny-list covers kube-system, kube-public, kube-node-lease, default, and any
-# namespace prefixed with "openshift-". This is a defense-in-depth measure to
-# prevent both operators and attackers from placing RoleBindings in namespaces
-# that host critical cluster infrastructure.
+# PURPOSE: Blocks creation of toolkit-managed RoleBindings in sensitive system
+# namespaces. The deny-list covers kube-system, kube-public, kube-node-lease,
+# default, and any namespace prefixed with "openshift-". This is a
+# defense-in-depth measure to prevent the scoping controller from placing
+# managed RoleBindings in namespaces that host critical cluster infrastructure.
+#
+# SCOPE: This policy only matches RoleBindings that carry the
+# operator-rbac-toolkit.io/scoped-access-owners annotation. RoleBindings
+# created by admins, Helm, OLM, or any other principal without the managed
+# annotation are not affected.
 #
 # CUSTOMIZATION: Add or remove namespace names in the CEL list, or adjust the
 # startsWith prefix to match your cluster's protected namespace convention.
@@ -23,6 +28,14 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE"]
         resources: ["rolebindings"]
+  # Only evaluate this policy for RoleBindings managed by the scoping controller.
+  # This prevents blocking legitimate admin/Helm/OLM RoleBinding creation in
+  # system namespaces.
+  matchConditions:
+    - name: has-managed-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
   validations:
     # Deny if the target namespace is in the protected list or starts with
     # "openshift-". The namespace is taken from the object metadata since

@@ -8,6 +8,8 @@ This guide walks through integrating the operator-rbac-toolkit into your Kuberne
 - [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) v0.22+
 - A Kubernetes operator built with controller-runtime (Operator SDK, Kubebuilder, or equivalent)
 
+**Note on version requirements:** The minimum cluster version (1.25+) refers to API compatibility. Build dependencies require controller-runtime v0.22+ (k8s client-go v0.34+). Kubernetes maintains backward API compatibility, so binaries built with newer client-go work against older clusters.
+
 ---
 
 ## Table of Contents
@@ -270,6 +272,8 @@ These follow OpenShift operator status conventions. You can also use the low-lev
 graceful.SetPermissionGranted(cr, false, "Missing permission: list secrets in namespace \"kube-system\"")
 graceful.UpdateStatus(ctx, r.Client, cr)
 ```
+
+**Note:** `UpdateStatus` accepts `client.Object`, so the CR passed to it must implement both `client.Object` (satisfied by embedding into a runtime object registered with the scheme) and `StatusProvider` (for `SetPermissionGranted` to set conditions). In practice, any kubebuilder/operator-sdk generated CR type already satisfies `client.Object`.
 
 ---
 

@@ -38,11 +38,14 @@ func (b *backoffTracker) reset(key string) {
 	delete(b.counts, key)
 }
 
-func (b *backoffTracker) resetAll() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	clear(b.counts)
-}
+// NOTE: resetAll() was intentionally removed. When Do() succeeds, we don't know
+// which resource the fn() operated on, so clearing all backoff entries would
+// incorrectly reset backoff for resources that are still failing (e.g., a
+// success on secrets would reset backoff for still-denied configmaps).
+// Instead, callers who know the resource key can call ResetBackoff(key)
+// explicitly. Stale entries in the counts map are harmless: each entry is a
+// string key + int count, and the map resets when the Handler is garbage
+// collected.
 
 // Handler wraps controller-runtime client operations with permission-aware error handling.
 type Handler struct {
@@ -74,7 +77,6 @@ func NewHandler(recorder record.EventRecorder, options ...Option) *Handler {
 func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn func() error) (ctrl.Result, error) {
 	err := fn()
 	if err == nil {
-		h.backoff.resetAll()
 		sp, ok := obj.(StatusProvider)
 		if ok {
 			prev := findCondition(sp, ConditionTypePermissionGranted)
@@ -129,7 +131,8 @@ func (h *Handler) ResetBackoff(key string) {
 
 // backoffKeyFromError extracts a structured key from a Forbidden error based on
 // the resource group/resource/name, avoiding unbounded map growth from arbitrary
-// error messages.
+// error messages. The fallback truncates to 100 chars to prevent unbounded key
+// growth from wrapped errors with variable suffixes.
 func backoffKeyFromError(err error) string {
 	if statusErr, ok := err.(*errors.StatusError); ok {
 		d := statusErr.ErrStatus.Details
@@ -137,7 +140,11 @@ func backoffKeyFromError(err error) string {
 			return fmt.Sprintf("%s/%s/%s", d.Group, d.Kind, d.Name)
 		}
 	}
-	return err.Error()
+	s := err.Error()
+	if len(s) > 100 {
+		s = s[:100]
+	}
+	return s
 }
 
 func parseForbiddenMessage(err error) string {
