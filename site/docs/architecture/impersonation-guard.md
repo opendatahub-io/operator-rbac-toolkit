@@ -19,9 +19,9 @@ flowchart TD
     E --> F["Set autoupdate=false annotation"]
     E --> G[Aggregation controller recomputes\nsystem:aggregate-to-edit without verb]
     
-    style D fill:#e8f5e9,stroke:#4CAF50
-    style E fill:#fff3e0,stroke:#FF9800
-    style G fill:#e8f5e9,stroke:#4CAF50
+    style D fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style E fill:#fff3e0,stroke:#FF9800,color:#000
+    style G fill:#e8f5e9,stroke:#4CAF50,color:#000
 ```
 
 The impersonation guard takes a three-part approach:

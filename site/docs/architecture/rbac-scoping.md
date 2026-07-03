@@ -55,12 +55,12 @@ flowchart TD
     K -- Yes --> L[Kubernetes deletes RoleBinding]
     K -- No --> M[RoleBinding persists]
     
-    style C fill:#fff3e0,stroke:#FF9800
-    style E fill:#fff3e0,stroke:#FF9800
-    style G fill:#e8f5e9,stroke:#4CAF50
-    style H fill:#e8f5e9,stroke:#4CAF50
-    style L fill:#ffebee,stroke:#f44336
-    style M fill:#e8f5e9,stroke:#4CAF50
+    style C fill:#fff3e0,stroke:#FF9800,color:#000
+    style E fill:#fff3e0,stroke:#FF9800,color:#000
+    style G fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style H fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style L fill:#ffebee,stroke:#f44336,color:#000
+    style M fill:#e8f5e9,stroke:#4CAF50,color:#000
 ```
 
 ```

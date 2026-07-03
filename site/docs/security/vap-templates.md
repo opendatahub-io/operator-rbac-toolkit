@@ -47,8 +47,8 @@ flowchart TB
     A6 -->|blocked by| V6
     A7 -->|blocked by| V7
     
-    style attack fill:#ffebee,stroke:#f44336
-    style vaps fill:#e8f5e9,stroke:#4CAF50
+    style attack fill:#ffebee,stroke:#f44336,color:#000
+    style vaps fill:#e8f5e9,stroke:#4CAF50,color:#000
 ```
 
 ## Available Templates

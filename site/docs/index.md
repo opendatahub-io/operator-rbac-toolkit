@@ -45,8 +45,8 @@ flowchart TB
     SC -->|creates RoleBindings| OA
     SR -.->|permission ceiling| SC
     
-    style operator fill:#e8f4fd,stroke:#2196F3
-    style admin fill:#f3e5f5,stroke:#9C27B0
+    style operator fill:#e8f4fd,stroke:#2196F3,color:#000
+    style admin fill:#f3e5f5,stroke:#9C27B0,color:#000
 ```
 
 **Trust boundary:** The operator SA is a pure RBAC consumer (zero write verbs). The scoper SA manages RoleBindings via `bind` on specific ClusterRoles only. Compromise of the operator SA cannot escalate into the admin trust domain.

@@ -60,8 +60,8 @@ flowchart TB
     SR -.->|ceiling enforced by K8s RBAC| RB
     VAP -.->|invariants enforced at API server| RB
     
-    style admin fill:#f3e5f5,stroke:#9C27B0
-    style op fill:#e8f4fd,stroke:#2196F3
+    style admin fill:#f3e5f5,stroke:#9C27B0,color:#000
+    style op fill:#e8f4fd,stroke:#2196F3,color:#000
 ```
 
 A compromise in the operator trust domain cannot escalate into the admin trust domain because:
@@ -86,7 +86,7 @@ flowchart TB
     PSA -->|single compromise grants| SL
     PSA -->|single compromise grants| AL
 
-    style combined fill:#fff3e0,stroke:#FF9800
+    style combined fill:#fff3e0,stroke:#FF9800,color:#000
 ```
 
 In this mode, compromising the platform operator SA grants the attacker both operator capabilities AND the `bind` verb for scoped ClusterRoles. The attacker can create RoleBindings in any namespace (bounded by namespace selector and VAPs).

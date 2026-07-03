@@ -26,10 +26,10 @@ flowchart TD
     F -- Yes --> G[Allow]
     F -- No --> H[Deny — SA is protected]
     
-    style C fill:#e8f5e9,stroke:#4CAF50
-    style E fill:#e8f5e9,stroke:#4CAF50
-    style G fill:#e8f5e9,stroke:#4CAF50
-    style H fill:#ffebee,stroke:#f44336
+    style C fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style E fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style G fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style H fill:#ffebee,stroke:#f44336,color:#000
 ```
 
 ```

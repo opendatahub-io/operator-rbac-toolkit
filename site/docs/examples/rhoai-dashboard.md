@@ -43,13 +43,13 @@ flowchart LR
 
     SA --> DASH["Dashboard Backend\n+ Graceful Degradation"]
 
-    style SC fill:#f3e5f5,stroke:#9C27B0
-    style DSC fill:#f3e5f5,stroke:#9C27B0
-    style RB1 fill:#e8f5e9,stroke:#4CAF50
-    style RB2 fill:#e8f5e9,stroke:#4CAF50
-    style RB3 fill:#e8f5e9,stroke:#4CAF50
-    style SA fill:#fff3e0,stroke:#FF9800
-    style DASH fill:#e8f4fd,stroke:#2196F3
+    style SC fill:#f3e5f5,stroke:#9C27B0,color:#000
+    style DSC fill:#f3e5f5,stroke:#9C27B0,color:#000
+    style RB1 fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style RB2 fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style RB3 fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style SA fill:#fff3e0,stroke:#FF9800,color:#000
+    style DASH fill:#e8f4fd,stroke:#2196F3,color:#000
 ```
 
 The RHOAI operator already reconciles DSC/DSCI and knows where the notebooks and model registry namespaces are. Embedding `pkg/scoper` into it requires zero additional deployment. The Dashboard itself never touches RBAC.

@@ -17,10 +17,10 @@ flowchart LR
     SB --> TD[Full Trust Domain\nSeparation]
     PO --> CT[Collapsed Trust\nDomain]
     
-    style standalone fill:#e8f5e9,stroke:#4CAF50
-    style embedded fill:#fff3e0,stroke:#FF9800
-    style TD fill:#e8f5e9,stroke:#4CAF50
-    style CT fill:#fff3e0,stroke:#FF9800
+    style standalone fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style embedded fill:#fff3e0,stroke:#FF9800,color:#000
+    style TD fill:#e8f5e9,stroke:#4CAF50,color:#000
+    style CT fill:#fff3e0,stroke:#FF9800,color:#000
 ```
 
 ## Two Options
@@ -60,7 +60,7 @@ flowchart TB
     PSA -->|single compromise grants| SL
     PSA -->|single compromise grants| AL
 
-    style combined fill:#fff3e0,stroke:#FF9800
+    style combined fill:#fff3e0,stroke:#FF9800,color:#000
 ```
 
 In this mode, compromising the platform operator SA grants the attacker both operator capabilities AND the `bind` verb for scoped ClusterRoles. The attacker can create RoleBindings in any namespace (bounded by namespace selector and VAPs).
