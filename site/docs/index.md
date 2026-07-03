@@ -31,7 +31,7 @@ flowchart TB
     subgraph operator ["Operator Trust Domain"]
         OL[Graceful Degradation Library]
         OA[Application Logic]
-        OS[Operator SA — zero RBAC write verbs]
+        OS["Operator SA\nzero RBAC write verbs"]
     end
     
     subgraph admin ["Cluster Admin Trust Domain"]

@@ -124,7 +124,7 @@ import "your-module/pkg/security"
 func main() {
     // ... manager setup ...
 
-    if err := security.RunAuditAtStartup(ctx, mgr.GetClient(), setupLog); err != nil {
+    if _, err := security.RunAuditAtStartup(ctx, mgr.GetClient(), setupLog); err != nil {
         setupLog.Error(err, "RBAC audit failed")
     }
 

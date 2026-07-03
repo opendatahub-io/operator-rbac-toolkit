@@ -1,20 +1,26 @@
 document.addEventListener("DOMContentLoaded", function () {
   var overlay = document.createElement("div");
   overlay.className = "diagram-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", "Diagram zoom viewer");
   overlay.innerHTML =
     '<div class="diagram-overlay-controls">' +
-    '<button class="diagram-btn" id="diagram-zoom-in" title="Zoom in">+</button>' +
-    '<button class="diagram-btn" id="diagram-zoom-out" title="Zoom out">−</button>' +
-    '<button class="diagram-btn" id="diagram-zoom-reset" title="Reset zoom">1:1</button>' +
-    '<button class="diagram-btn" id="diagram-close" title="Close">✕</button>' +
+    '<button class="diagram-btn" id="diagram-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>' +
+    '<button class="diagram-btn" id="diagram-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>' +
+    '<button class="diagram-btn" id="diagram-zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>' +
+    '<button class="diagram-btn" id="diagram-close" title="Close" aria-label="Close diagram viewer">✕</button>' +
     "</div>" +
     '<div class="diagram-overlay-content"></div>';
   document.body.appendChild(overlay);
 
   var content = overlay.querySelector(".diagram-overlay-content");
+  var closeBtn = overlay.querySelector("#diagram-close");
   var scale = 1;
+  var triggerElement = null;
 
   function openDiagram(svg) {
+    triggerElement = svg;
     var clone = svg.cloneNode(true);
     clone.removeAttribute("style");
     clone.style.maxWidth = "100%";
@@ -25,6 +31,7 @@ document.addEventListener("DOMContentLoaded", function () {
     applyScale();
     overlay.classList.add("active");
     document.body.style.overflow = "hidden";
+    closeBtn.focus();
   }
 
   function closeDiagram() {
@@ -32,6 +39,10 @@ document.addEventListener("DOMContentLoaded", function () {
     document.body.style.overflow = "";
     content.innerHTML = "";
     scale = 1;
+    if (triggerElement) {
+      triggerElement.focus();
+      triggerElement = null;
+    }
   }
 
   function applyScale() {
