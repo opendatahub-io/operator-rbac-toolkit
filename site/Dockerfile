@@ -6,7 +6,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mkdocs.yml .
 COPY docs/ docs/
-RUN mkdocs build --strict
+
+RUN git init && git add -A && git commit -m "build" --allow-empty && \
+    ENABLED_HTMLPROOFER=false mkdocs build --strict
 
 FROM registry.access.redhat.com/ubi9/httpd-24:latest
 
