@@ -96,6 +96,9 @@ nav:
     - Configuration: integration/configuration.md
     - Migration: integration/migration.md
     - Troubleshooting: integration/troubleshooting.md
+  - Examples:
+    - examples/index.md
+    - RHOAI Dashboard: examples/rhoai-dashboard.md
   - Design:
     - Tradeoffs: design/tradeoffs.md
   - Performance:
