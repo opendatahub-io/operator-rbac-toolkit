@@ -1,115 +1,197 @@
-document.addEventListener("DOMContentLoaded", function () {
-  var overlay = document.createElement("div");
-  overlay.className = "diagram-overlay";
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-modal", "true");
-  overlay.setAttribute("aria-label", "Diagram zoom viewer");
-  overlay.innerHTML =
-    '<div class="diagram-overlay-controls">' +
-    '<button class="diagram-btn" id="diagram-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>' +
-    '<button class="diagram-btn" id="diagram-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>' +
-    '<button class="diagram-btn" id="diagram-zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>' +
-    '<button class="diagram-btn" id="diagram-close" title="Close" aria-label="Close diagram viewer">✕</button>' +
-    "</div>" +
-    '<div class="diagram-overlay-content"></div>';
-  document.body.appendChild(overlay);
+// Diagram controls for mkdocs-material mermaid diagrams.
+//
+// mkdocs-material replaces <pre class="mermaid"> with <div class="mermaid">
+// containing a CLOSED shadow DOM with the SVG inside. We cannot access the
+// SVG directly, so we operate on the outer <div> element.
+//
+// Key design decisions:
+// - Wrap each div.mermaid in a .diagram-wrapper for scroll containment
+// - Use CSS "zoom" (not transform:scale) so layout reflows on zoom
+// - Fullscreen MOVES the original div (not clone) to preserve shadow DOM
+(function () {
+  var ZOOM_STEP = 0.25;
+  var MIN_ZOOM = 0.5;
+  var MAX_ZOOM = 5;
 
-  var content = overlay.querySelector(".diagram-overlay-content");
-  var closeBtn = overlay.querySelector("#diagram-close");
-  var scale = 1;
-  var triggerElement = null;
+  function addControls(div) {
+    if (div._hasControls) return;
+    if (div.tagName !== "DIV") return;
+    div._hasControls = true;
+    div._zoomLevel = 1;
 
-  function openDiagram(svg) {
-    triggerElement = svg;
-    var clone = svg.cloneNode(true);
-    clone.removeAttribute("style");
-    clone.style.maxWidth = "100%";
-    clone.style.maxHeight = "100%";
-    content.innerHTML = "";
-    content.appendChild(clone);
-    scale = 1;
-    applyScale();
-    overlay.classList.add("active");
-    document.body.style.overflow = "hidden";
-    closeBtn.focus();
-  }
+    var wrapper = document.createElement("div");
+    wrapper.className = "diagram-wrapper";
+    div.parentNode.insertBefore(wrapper, div);
+    wrapper.appendChild(div);
 
-  function closeDiagram() {
-    overlay.classList.remove("active");
-    document.body.style.overflow = "";
-    content.innerHTML = "";
-    scale = 1;
-    if (triggerElement) {
-      triggerElement.focus();
-      triggerElement = null;
-    }
-  }
-
-  function applyScale() {
-    var svg = content.querySelector("svg");
-    if (svg) {
-      svg.style.transform = "scale(" + scale + ")";
-      svg.style.transformOrigin = "center center";
-    }
-  }
-
-  overlay.querySelector("#diagram-zoom-in").addEventListener("click", function () {
-    scale = Math.min(scale * 1.25, 5);
-    applyScale();
-  });
-
-  overlay.querySelector("#diagram-zoom-out").addEventListener("click", function () {
-    scale = Math.max(scale / 1.25, 0.2);
-    applyScale();
-  });
-
-  overlay.querySelector("#diagram-zoom-reset").addEventListener("click", function () {
-    scale = 1;
-    applyScale();
-  });
-
-  overlay.querySelector("#diagram-close").addEventListener("click", closeDiagram);
-
-  overlay.addEventListener("click", function (e) {
-    if (e.target === overlay || e.target === content) {
-      closeDiagram();
-    }
-  });
-
-  document.addEventListener("keydown", function (e) {
-    if (!overlay.classList.contains("active")) return;
-    if (e.key === "Escape") closeDiagram();
-    if (e.key === "+" || e.key === "=") {
-      scale = Math.min(scale * 1.25, 5);
-      applyScale();
-    }
-    if (e.key === "-") {
-      scale = Math.max(scale / 1.25, 0.2);
-      applyScale();
-    }
-    if (e.key === "0") {
-      scale = 1;
-      applyScale();
-    }
-  });
-
-  var observer = new MutationObserver(function () {
-    document.querySelectorAll("pre.mermaid svg, .mermaid svg").forEach(function (svg) {
-      if (svg.dataset.zoomEnabled) return;
-      svg.dataset.zoomEnabled = "true";
-      svg.style.cursor = "pointer";
-
-      var hint = document.createElement("div");
-      hint.className = "diagram-hint";
-      hint.textContent = "Click to expand";
-      svg.parentElement.style.position = "relative";
-      svg.parentElement.appendChild(hint);
-
-      svg.addEventListener("click", function () {
-        openDiagram(svg);
-      });
+    requestAnimationFrame(function () {
+      setTimeout(function () {
+        if (div.scrollHeight > wrapper.clientHeight + 10) {
+          wrapper.classList.add("clipped");
+        }
+      }, 2000);
     });
-  });
 
-  observer.observe(document.body, { childList: true, subtree: true });
-});
+    var bar = document.createElement("div");
+    bar.className = "diagram-actions";
+    bar.innerHTML =
+      '<button data-action="zoom-in" title="Zoom in">&#43;</button>' +
+      '<button data-action="zoom-out" title="Zoom out">&#8722;</button>' +
+      '<button data-action="reset" title="Reset zoom">1:1</button>' +
+      '<button data-action="fullscreen" title="View full screen">&#9974;</button>';
+    wrapper.after(bar);
+  }
+
+  function scanAll() {
+    document.querySelectorAll("div.mermaid").forEach(addControls);
+  }
+
+  function openFullscreen(mermaidDiv) {
+    var overlay = document.createElement("div");
+    overlay.className = "diagram-overlay";
+
+    var toolbar = document.createElement("div");
+    toolbar.className = "diagram-overlay-toolbar";
+    toolbar.innerHTML =
+      '<button data-action="ol-zoom-in" title="Zoom in">&#43;</button>' +
+      '<button data-action="ol-zoom-out" title="Zoom out">&#8722;</button>' +
+      '<button data-action="ol-reset" title="Reset">1:1</button>' +
+      '<button data-action="ol-close" title="Close">&#10005;</button>';
+    overlay.appendChild(toolbar);
+
+    var container = document.createElement("div");
+    container.className = "diagram-overlay-content";
+
+    var wrapper = mermaidDiv.parentNode;
+    var placeholder = document.createElement("div");
+    placeholder.style.display = "none";
+    wrapper.insertBefore(placeholder, mermaidDiv);
+
+    var origStyle = mermaidDiv.style.cssText;
+
+    mermaidDiv.style.cssText =
+      "max-width:none; max-height:none; overflow:visible; zoom:1;";
+    container.appendChild(mermaidDiv);
+    overlay.appendChild(container);
+    document.body.appendChild(overlay);
+
+    var naturalW = mermaidDiv.scrollWidth || mermaidDiv.offsetWidth;
+    var naturalH = mermaidDiv.scrollHeight || mermaidDiv.offsetHeight;
+    var availW = container.clientWidth - 64;
+    var availH = container.clientHeight - 32;
+    var fitZoom = 1;
+    if (naturalW > 0 && naturalH > 0) {
+      fitZoom = Math.min(availW / naturalW, availH / naturalH, 3);
+      fitZoom = Math.max(fitZoom, 0.5);
+    }
+    mermaidDiv.style.zoom = fitZoom;
+    var olZoom = fitZoom;
+
+    function close() {
+      mermaidDiv.style.cssText = origStyle;
+      wrapper.insertBefore(mermaidDiv, placeholder);
+      placeholder.remove();
+      overlay.remove();
+      document.removeEventListener("keydown", escHandler);
+    }
+
+    function escHandler(e) {
+      if (e.key === "Escape") close();
+    }
+    document.addEventListener("keydown", escHandler);
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay || e.target === container) close();
+    });
+
+    toolbar.addEventListener("click", function (e) {
+      var btn = e.target.closest("button");
+      if (!btn) return;
+      var action = btn.dataset.action;
+      if (action === "ol-close") {
+        close();
+        return;
+      }
+      if (action === "ol-zoom-in")
+        olZoom = Math.min(olZoom + ZOOM_STEP, MAX_ZOOM);
+      if (action === "ol-zoom-out")
+        olZoom = Math.max(olZoom - ZOOM_STEP, MIN_ZOOM);
+      if (action === "ol-reset") olZoom = 1;
+      mermaidDiv.style.zoom = olZoom === 1 ? "" : olZoom;
+    });
+  }
+
+  document.addEventListener(
+    "click",
+    function (e) {
+      var btn = e.target.closest(".diagram-actions button");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      var bar = btn.closest(".diagram-actions");
+      var wrapper = bar.previousElementSibling;
+      if (!wrapper || !wrapper.classList.contains("diagram-wrapper")) return;
+      var mermaidDiv = wrapper.querySelector("div.mermaid");
+      if (!mermaidDiv) return;
+
+      var action = btn.dataset.action;
+
+      if (action === "fullscreen") {
+        openFullscreen(mermaidDiv);
+        return;
+      }
+
+      if (!mermaidDiv._zoomLevel) mermaidDiv._zoomLevel = 1;
+      if (action === "zoom-in")
+        mermaidDiv._zoomLevel = Math.min(
+          mermaidDiv._zoomLevel + ZOOM_STEP,
+          MAX_ZOOM
+        );
+      if (action === "zoom-out")
+        mermaidDiv._zoomLevel = Math.max(
+          mermaidDiv._zoomLevel - ZOOM_STEP,
+          MIN_ZOOM
+        );
+      if (action === "reset") mermaidDiv._zoomLevel = 1;
+
+      mermaidDiv.style.zoom =
+        mermaidDiv._zoomLevel === 1 ? "" : mermaidDiv._zoomLevel;
+
+      if (mermaidDiv._zoomLevel === 1) {
+        wrapper.style.overflow = "";
+        wrapper.classList.toggle("clipped", mermaidDiv.scrollHeight > wrapper.clientHeight + 10);
+      } else {
+        wrapper.style.overflow = "auto";
+        wrapper.classList.remove("clipped");
+      }
+    },
+    true
+  );
+
+  var pollCount = 0;
+  var pollId = setInterval(function () {
+    scanAll();
+    if (++pollCount > 30) clearInterval(pollId);
+  }, 1000);
+
+  var raf = false;
+  new MutationObserver(function () {
+    if (raf) return;
+    raf = true;
+    requestAnimationFrame(function () {
+      raf = false;
+      scanAll();
+    });
+  }).observe(document.body, { childList: true, subtree: true });
+
+  if (typeof document$ !== "undefined") {
+    document$.subscribe(function () {
+      pollCount = 0;
+      pollId = setInterval(function () {
+        scanAll();
+        if (++pollCount > 30) clearInterval(pollId);
+      }, 1000);
+    });
+  }
+})();
