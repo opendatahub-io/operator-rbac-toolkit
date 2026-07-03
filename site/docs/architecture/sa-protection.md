@@ -16,6 +16,22 @@ Without SA protection, any user with `create pods` permission in the operator's 
 
 The webhook enforces a simple decision flow:
 
+```mermaid
+flowchart TD
+    A[Pod CREATE/UPDATE request] --> B{Uses a protected ServiceAccount?}
+    B -- No --> C[Allow — not our concern]
+    B -- Yes --> D{UPDATE: SA changed?}
+    D -- No --> E[Allow — SA unchanged]
+    D -- Yes/CREATE --> F{Requester in allowed-identities?}
+    F -- Yes --> G[Allow]
+    F -- No --> H[Deny — SA is protected]
+    
+    style C fill:#e8f5e9,stroke:#4CAF50
+    style E fill:#e8f5e9,stroke:#4CAF50
+    style G fill:#e8f5e9,stroke:#4CAF50
+    style H fill:#ffebee,stroke:#f44336
+```
+
 ```
 Pod CREATE/UPDATE received
     |

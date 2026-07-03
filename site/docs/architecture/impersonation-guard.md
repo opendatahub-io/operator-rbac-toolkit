@@ -10,6 +10,20 @@ A reconciler that closes the impersonation bypass in Kubernetes RBAC. The defaul
 
 `system:aggregate-to-edit` is an aggregated ClusterRole. Its `rules` field is computed by the Kubernetes aggregation controller from component ClusterRoles matching the `rbac.authorization.kubernetes.io/aggregate-to-edit: "true"` label selector. The `impersonate` verb comes from one of these component ClusterRoles.
 
+```mermaid
+flowchart TD
+    A[Component ClusterRole with\naggregate-to-edit label changes] --> B[Reconciler triggered]
+    B --> C{Rules grant impersonate\non serviceaccounts?}
+    C -- No --> D[No-op — already clean]
+    C -- Yes --> E[Strip impersonate verb\nfrom component ClusterRole]
+    E --> F["Set autoupdate=false annotation"]
+    E --> G[Aggregation controller recomputes\nsystem:aggregate-to-edit without verb]
+    
+    style D fill:#e8f5e9,stroke:#4CAF50
+    style E fill:#fff3e0,stroke:#FF9800
+    style G fill:#e8f5e9,stroke:#4CAF50
+```
+
 The impersonation guard takes a three-part approach:
 
 1. **Component ClusterRole modification.** Identifies the component ClusterRole that contributes the `impersonate` verb for ServiceAccounts (the one with the `aggregate-to-edit` label) and removes the `impersonate` verb from it. This causes the aggregation controller to recompute `system:aggregate-to-edit` without the verb.

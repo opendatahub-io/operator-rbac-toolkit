@@ -39,6 +39,31 @@ All residual risk assessments assume VAP integrity. See [Known Limitations: VAP 
 
 In standalone deployment, the scoping controller runs as a separate Deployment with its own ServiceAccount. This creates two distinct trust domains.
 
+```mermaid
+flowchart TB
+    subgraph admin ["Cluster Admin Trust Domain"]
+        SR[Static ClusterRole\ndefines permission ceiling]
+        SCS[Scoping Controller SA]
+        VAP[VAP Templates\nAPI-server enforced]
+        IG[Impersonation Guard]
+    end
+    
+    SCS -->|creates/manages| RB[Namespace-Scoped\nRoleBindings]
+    
+    subgraph op ["Operator Trust Domain"]
+        OSA[Operator SA\nzero RBAC write verbs]
+        GL[Graceful Degradation\nLibrary]
+        APP[Application Logic]
+    end
+    
+    RB -->|grants access to| OSA
+    SR -.->|ceiling enforced by K8s RBAC| RB
+    VAP -.->|invariants enforced at API server| RB
+    
+    style admin fill:#f3e5f5,stroke:#9C27B0
+    style op fill:#e8f4fd,stroke:#2196F3
+```
+
 ```
 +------------------------------------------+
 |          Cluster Admin Trust Domain       |

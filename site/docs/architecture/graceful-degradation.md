@@ -12,6 +12,22 @@ No reusable library exists for this pattern today. ArgoCD built `resource.respec
 
 ### Permission-Aware Error Handling
 
+```mermaid
+flowchart TD
+    A[handler.Do wraps operation] --> B{Operation result?}
+    B -- Success --> C{Was previously denied?}
+    C -- Yes --> D[Set PermissionGranted=True\nSet Degraded=False\nEmit PermissionRestored event]
+    C -- No --> E[Return Result — continue]
+    B -- Forbidden --> F[Set PermissionGranted=False\nSet Degraded=True\nEmit PermissionDenied event]
+    F --> G[Return RequeueAfter with backoff]
+    B -- Other error --> H[Return error unchanged]
+    
+    style E fill:#e8f5e9,stroke:#4CAF50
+    style D fill:#e8f5e9,stroke:#4CAF50
+    style G fill:#fff3e0,stroke:#FF9800
+    style H fill:#ffebee,stroke:#f44336
+```
+
 The library wraps controller-runtime client operations with permission-aware error handling. When a `Forbidden` error is returned:
 
 1. The error is classified (missing verb, missing resource, missing namespace).

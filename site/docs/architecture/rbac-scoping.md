@@ -40,6 +40,29 @@ For the standalone binary, this configuration is provided via a YAML file (typic
 
 ### CR Lifecycle Flow
 
+```mermaid
+flowchart TD
+    A[CR created in namespace] --> B{Namespace allowed?}
+    B -- No --> C[No-op — namespace denied or not in selector]
+    B -- Yes --> D{ClusterRole exists?}
+    D -- No --> E[Log warning, emit event, requeue]
+    D -- Yes --> F{RoleBinding exists?}
+    F -- No --> G[Create RoleBinding\nwith OwnerReference to CR]
+    F -- Yes --> H[Patch to add OwnerReference]
+    
+    I[CR deleted] --> J[OwnerReference GC]
+    J --> K{Last owner?}
+    K -- Yes --> L[Kubernetes deletes RoleBinding]
+    K -- No --> M[RoleBinding persists]
+    
+    style C fill:#fff3e0,stroke:#FF9800
+    style E fill:#fff3e0,stroke:#FF9800
+    style G fill:#e8f5e9,stroke:#4CAF50
+    style H fill:#e8f5e9,stroke:#4CAF50
+    style L fill:#ffebee,stroke:#f44336
+    style M fill:#e8f5e9,stroke:#4CAF50
+```
+
 ```
 CR Created in namespace "foo"
     |

@@ -26,6 +26,29 @@ The toolkit is split into three independent components. Each can be deployed on 
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph operator ["Operator Trust Domain"]
+        OL[Graceful Degradation Library]
+        OA[Application Logic]
+        OS[Operator SA — zero RBAC write verbs]
+    end
+    
+    subgraph admin ["Cluster Admin Trust Domain"]
+        SC[RBAC Scoping Controller]
+        SP[SA Protection Webhook]
+        IG[Impersonation Guard]
+        VA[VAP Templates]
+        SR[Static ClusterRole]
+    end
+    
+    SC -->|creates RoleBindings| OA
+    SR -.->|permission ceiling| SC
+    
+    style operator fill:#e8f4fd,stroke:#2196F3
+    style admin fill:#f3e5f5,stroke:#9C27B0
+```
+
 ```
 Operator Author                          Cluster Admin
      |                                        |

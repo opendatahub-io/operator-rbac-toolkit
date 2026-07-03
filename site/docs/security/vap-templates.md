@@ -13,6 +13,44 @@ VAP templates are provided as YAML files in `config/vap/`. Cluster admins deploy
 
 On older clusters, see [Clusters Without VAP Support](#clusters-without-vap-support) below.
 
+## Defense Layers
+
+The following diagram maps common attack vectors to the VAP templates that block them.
+
+```mermaid
+flowchart TB
+    subgraph attack ["Compromised SA Attack Vectors"]
+        A1[Create RoleBinding\nin kube-system]
+        A2[Change RoleBinding\nsubjects]
+        A3[Create RoleBinding\nin unlabeled namespace]
+        A4[Modify static\nClusterRole]
+        A5[Label namespace\nto bypass allow-list]
+        A6[Grant impersonation\nprivileges]
+        A7[kubectl debug\nto access SA token]
+    end
+    
+    subgraph vaps ["VAP Defense Layers"]
+        V1[deny-rolebinding-in-\nprotected-namespaces]
+        V2[restrict-scoped-\nrolebinding-subjects]
+        V3[allow-rolebinding-in-\nlabeled-namespaces]
+        V4[protect-static-\nclusterrole]
+        V5[protect-rbac-\nallowed-label]
+        V6[deny-impersonate-\ngrants]
+        V7[restrict-ephemeral-\ncontainers]
+    end
+    
+    A1 -->|blocked by| V1
+    A2 -->|blocked by| V2
+    A3 -->|blocked by| V3
+    A4 -->|blocked by| V4
+    A5 -->|blocked by| V5
+    A6 -->|blocked by| V6
+    A7 -->|blocked by| V7
+    
+    style attack fill:#ffebee,stroke:#f44336
+    style vaps fill:#e8f5e9,stroke:#4CAF50
+```
+
 ## Available Templates
 
 | Template | Purpose | What It Prevents |

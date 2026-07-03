@@ -2,6 +2,27 @@
 
 The RBAC Scoping Controller can be deployed in two ways: as a standalone binary or as an embedded library. Both use the same `pkg/scoper` library. The difference is the deployment model and security posture.
 
+```mermaid
+flowchart LR
+    subgraph standalone ["Standalone Deployment"]
+        SB[Scoper Binary\nown SA, leader election]
+        SC[Separate Deployment]
+    end
+    
+    subgraph embedded ["Embedded Deployment"]
+        PO[Platform Operator\nshared SA]
+        EL[Embedded pkg/scoper]
+    end
+    
+    SB --> TD[Full Trust Domain\nSeparation]
+    PO --> CT[Collapsed Trust\nDomain]
+    
+    style standalone fill:#e8f5e9,stroke:#4CAF50
+    style embedded fill:#fff3e0,stroke:#FF9800
+    style TD fill:#e8f5e9,stroke:#4CAF50
+    style CT fill:#fff3e0,stroke:#FF9800
+```
+
 ## Two Options
 
 ### Standalone Binary (`cmd/scoper`)
