@@ -184,53 +184,42 @@ When the `OdhDashboardConfig` CR is reconciled, the scoping controller automatic
 - `odh-dashboard-notebooks-binding` RoleBinding in the notebooks namespace (annotation-based ownership, cleaned up by periodic reconciler within 5 minutes of CR deletion)
 - `odh-dashboard-modelregistry-binding` RoleBinding in the model registry namespace (same as notebooks)
 
-## Step 3: Add Graceful Degradation to Dashboard
+## Step 3: Handling Permission Errors in Dashboard
 
-If any component that reconciles Dashboard resources is built with controller-runtime, integrate the graceful degradation library to handle permission transitions cleanly. For the TypeScript backend, this means catching `Forbidden` HTTP responses and surfacing them via the Dashboard UI.
+### Dashboard Backend Architecture
 
-For a controller-runtime reconciler that manages Dashboard resources:
+The Dashboard backend is **not** a controller-runtime operator. It consists of:
 
-```go
-import "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+- **TypeScript backend** (Fastify) for the main API
+- **Go BFF services** (model-registry, gen-ai, maas, mlflow, eval-hub, automl, autorag) running as HTTP sidecar containers
 
-type DashboardReconciler struct {
-    client.Client
-    Scheme   *runtime.Scheme
-    graceful *graceful.Handler
-}
+Neither uses controller-runtime. The `pkg/graceful` library (which returns `ctrl.Result` and uses controller-runtime patterns) does not apply to Dashboard's current architecture.
 
-func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    r.graceful = graceful.NewHandler(mgr.GetEventRecorderFor("odh-dashboard"))
-    return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.OdhDashboardConfig{}).
-        Complete(r)
-}
+### What Dashboard Needs to Do (Nothing, for scoping)
 
-func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-    cr := &v1alpha1.OdhDashboardConfig{}
-    if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
-        return ctrl.Result{}, client.IgnoreNotFound(err)
-    }
+For the core scoping use case, **Dashboard doesn't need to change at all.** The scoping controller creates the RoleBindings. Dashboard's SA gets the scoped permissions. If the SA had cluster-wide access before and now has namespace-scoped access, the same API calls succeed in the scoped namespaces and fail with 403 in namespaces that were never needed anyway.
 
-    // Access secrets in the notebooks namespace.
-    // If the RoleBinding hasn't been created yet (scoping controller
-    // hasn't reconciled), this returns Forbidden. The handler sets
-    // PermissionGranted=False on the CR status and requeues with backoff.
-    secrets := &corev1.SecretList{}
-    result, err := r.graceful.Do(ctx, r.Client, cr, func() error {
-        return r.List(ctx, secrets, client.InNamespace(cr.Spec.NotebookNamespace))
-    })
-    if err != nil {
-        return result, err
-    }
-    if result.RequeueAfter > 0 {
-        return result, nil
-    }
+### Handling 403s in the TypeScript Backend
 
-    // Permission granted, proceed normally
-    return ctrl.Result{}, nil
+If a RoleBinding hasn't been created yet (race during initial deployment), the Dashboard's existing Fastify error handling already surfaces K8s API errors to the frontend. The TypeScript backend catches API errors at the `fastify.kube.*` call sites:
+
+```typescript
+// Existing pattern in Dashboard backend (no changes needed)
+try {
+  const secrets = await fastify.kube.coreV1Api.listNamespacedSecret(namespace);
+  return secrets.body.items;
+} catch (e) {
+  if (e.statusCode === 403) {
+    // Already handled: returns error to frontend, UI shows appropriate message
+    throw createError(403, `Insufficient permissions in namespace ${namespace}`);
+  }
+  throw e;
 }
 ```
+
+### Future: controller-runtime Integration (3.5+)
+
+When Dashboard components are managed by a controller-runtime operator (planned for 3.5+), the `pkg/graceful` library becomes applicable. At that point, the operator reconciler can use `handler.Do()` to wrap K8s API calls with structured status conditions, events, and exponential backoff. Until then, the TypeScript error handling is sufficient.
 
 ## Step 4: Migration
 
@@ -303,6 +292,44 @@ kubectl get secrets -A --token=$TOKEN
 | Ongoing admin RBAC maintenance | Manual (track permission drift) | Automated (scoping controller manages RoleBindings) |
 
 The Dashboard continues to function identically. The only change is that a compromised SA token can no longer access resources outside the namespaces where access is actually needed.
+
+## RHOAI Version Compatibility
+
+The scoping solution works across all active RHOAI versions. The ClusterRole diff between versions shows the core scoping problem (Rule 7: configmaps, PVCs, secrets on a ClusterRoleBinding) is identical in all three.
+
+| RHOAI Version | Dashboard Tag | ClusterRole Rules | Scoping Applicable? |
+|---------------|--------------|-------------------|-------------------|
+| **2.25** | v2.36.0 | 24 | Yes. Rule 7 (configmaps, PVCs, secrets) is present and cluster-wide. |
+| **3.3** | v3.3.0 | 28 | Yes. Same Rule 7. +4 rules for BFF resources (ingresses, etc.) |
+| **3.4** | v3.4.0 | 30 | Yes. Same Rule 7. +2 rules for tokenreviews, subjectaccessreviews |
+
+### What Changed Between Versions
+
+**2.25 to 3.3** (+4 rules): Added `ingresses` to an existing rule (gen-ai BFF domain autodiscovery). No new cross-namespace scoping needs.
+
+**3.3 to 3.4** (+2 rules): Added `tokenreviews` and `subjectaccessreviews` (BFF auth code). Both are cluster-scoped API calls (not namespace-scoped), and both are already covered by `system:auth-delegator`. These are redundant additions that don't affect scoping.
+
+### What Stays the Same
+
+- **Rule 7** (configmaps, PVCs, secrets with full verb set including unused `watch`): identical in all versions
+- **Rule 16** (rolebindings, clusterrolebindings, roles): identical in all versions
+- **The watched CR** (`OdhDashboardConfig`): exists in all versions
+- **The DSC namespace configuration fields**: available in all versions
+
+### Version-Specific Configuration
+
+The `ScopingTarget` configuration is the same for all three versions. The only difference is the static ClusterRole content (3.3/3.4 have additional BFF rules), but the BFF rules are cluster-scoped reads that stay on the ClusterRole, not namespace-scoped resources that need scoping.
+
+### Components by Version
+
+| Component | 2.25 | 3.3 | 3.4 | 3.5+ |
+|-----------|------|-----|-----|------|
+| **Scoping controller** (embedded in RHOAI operator) | Works | Works | Works | Works |
+| **Static ClusterRoles** (admin-deployed) | Same rules | Same rules | Same rules | Same rules |
+| **Graceful degradation library** (Dashboard-side) | N/A | N/A | N/A | Viable with controller-runtime integration |
+| **Dashboard backend error handling** | Existing Fastify 403 handling | Same | Same | Can adopt `pkg/graceful` |
+
+The scoping controller requires no Dashboard changes. Dashboard gets namespace-scoped permissions instead of cluster-wide, and the existing error handling covers any transient 403s during RoleBinding provisioning.
 
 ## What Andrew Asked For
 
