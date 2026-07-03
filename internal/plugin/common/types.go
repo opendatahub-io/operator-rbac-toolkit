@@ -11,6 +11,9 @@ type PluginConfig struct {
 	SAName       string
 	SANamespace  string
 
+	// Go module path (parsed from PROJECT file's "repo" field)
+	ModulePath string
+
 	// Modes
 	DryRun bool
 	Force  bool

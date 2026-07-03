@@ -7,8 +7,7 @@ copyright: Copyright &copy; Red Hat, Inc.
 theme:
   name: material
   language: en
-  favicon: images/favicon.ico
-  logo: images/logo.png
+  # Using MkDocs Material defaults (no custom favicon/logo images provided)
   icon:
     repo: fontawesome/brands/github
   font:
@@ -85,6 +84,7 @@ nav:
     - Threat Model: security/threat-model.md
     - VAP Templates: security/vap-templates.md
   - Integration Guide:
+    - integration/index.md
     - Graceful Degradation: integration/graceful-degradation.md
     - RBAC Scoping: integration/rbac-scoping.md
     - SA Protection: integration/sa-protection.md

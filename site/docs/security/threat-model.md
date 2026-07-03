@@ -15,7 +15,7 @@ The threat model is built on six core assumptions:
 
 ## Attack Chain Analysis
 
-All residual risk assessments assume VAP integrity. See [Known Limitations: VAP Self-Protection](../reference/known-limitations.md) for VAP self-protection limitations.
+All residual risk assessments assume VAP integrity. See [Known Limitations: VAP Self-Protection](../design/tradeoffs.md) for VAP self-protection limitations.
 
 | # | Attack Vector | Mitigated By | Residual Risk |
 |---|---------------|-------------|---------------|

@@ -35,10 +35,11 @@ Add the following imports and setup code to your `cmd/main.go`:
 
 ```go
 import (
-	"{{ .OperatorName }}/pkg/security"
+	"{{ .ModulePath }}/pkg/security"
 	"github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
 {{- if .SAProtection }}
 	"github.com/ugiordan/operator-rbac-toolkit/pkg/saprotection"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 {{- end }}
 )
 
@@ -70,8 +71,8 @@ func main() {
 {{- if .SAProtection }}
 
 	// Service Account Protection: block mutations to operator service accounts
-	webhook := saprotection.NewWebhook(security.WebhookConfig(), mgr.GetScheme())
-	mgr.GetWebhookServer().Register("/validate-v1-pod", &admission.Webhook{Handler: webhook})
+	saWebhook := saprotection.NewWebhook(security.WebhookConfig(), mgr.GetScheme())
+	mgr.GetWebhookServer().Register("/validate-sa-protection", &webhook.Admission{Handler: saWebhook})
 {{- end }}
 
 	// ... rest of your setup, passing gracefulHandler to reconcilers ...

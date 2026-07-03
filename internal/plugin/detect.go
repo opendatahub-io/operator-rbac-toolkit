@@ -18,6 +18,7 @@ func DetectIdentity(cfg *common.PluginConfig, projectYAML string, universe map[s
 	}
 
 	projectName, _ := project["projectName"].(string)
+	repoPath, _ := project["repo"].(string)
 
 	// Manifest scan for SA name/namespace
 	if cfg.SAName == "" || cfg.SANamespace == "" {
@@ -44,6 +45,15 @@ func DetectIdentity(cfg *common.PluginConfig, projectYAML string, universe map[s
 	}
 	if cfg.SANamespace == "" {
 		cfg.SANamespace = cfg.OperatorName + "-system"
+	}
+
+	// Set Go module path from PROJECT file's "repo" field
+	if cfg.ModulePath == "" {
+		if repoPath != "" {
+			cfg.ModulePath = repoPath
+		} else {
+			return fmt.Errorf("PROJECT file does not contain 'repo' field; cannot determine Go module path")
+		}
 	}
 
 	return nil

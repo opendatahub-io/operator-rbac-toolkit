@@ -113,5 +113,5 @@ No webhooks, no CRDs, no additional deployments. Just `go get github.com/ugiorda
 - **[Installation](getting-started/installation.md)**: Install packages and review prerequisites.
 - **[Quick Start](getting-started/quick-start.md)**: Step-by-step graceful degradation integration.
 - **[Choose Your Deployment Model](getting-started/choose-your-deployment.md)**: Standalone binary vs. embedded library.
-- **[Technical Design](design/index.md)**: Full architecture, threat model, and design decisions.
+- **[Technical Design](design/tradeoffs.md)**: Full architecture, threat model, and design decisions.
 - **[Integration Guide](integration/index.md)**: Complete integration reference for operator authors and cluster admins.

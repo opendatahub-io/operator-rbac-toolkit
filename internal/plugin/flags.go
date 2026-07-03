@@ -36,6 +36,16 @@ func ParseFlags(args []string) (common.PluginConfig, error) {
 
 // ValidateFlags checks flag values.
 func ValidateFlags(cfg *common.PluginConfig) error {
+	if cfg.OperatorName == "" {
+		return fmt.Errorf("operator name must not be empty")
+	}
+	if cfg.SAName == "" {
+		return fmt.Errorf("SA name must not be empty")
+	}
+	if cfg.SANamespace == "" {
+		return fmt.Errorf("SA namespace must not be empty")
+	}
+
 	if err := validateDNS1123("operator name", cfg.OperatorName); err != nil {
 		return err
 	}

@@ -15,7 +15,7 @@ import (
 //
 // Call this from main.go after manager creation:
 //
-//	findings, err := security.RunAuditAtStartup(ctx, mgr.GetAPIReader(), setupLog)
+//	findings, err := security.RunAuditAtStartup(ctx, mgr.GetClient(), setupLog)
 //	if err != nil {
 //	    setupLog.Error(err, "RBAC audit scan had errors")
 //	}

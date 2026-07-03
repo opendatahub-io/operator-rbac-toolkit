@@ -84,7 +84,7 @@ kubectl delete clusterrolebinding my-operator-binding
 
 ### Step 7: Deploy VAP templates
 
-Apply the protection policies for defense in depth (see the [VAP Templates](../architecture/vap-templates.md) section).
+Apply the protection policies for defense in depth (see the [VAP Templates](../security/vap-templates.md) section).
 
 ```bash
 kubectl apply -f config/vap/

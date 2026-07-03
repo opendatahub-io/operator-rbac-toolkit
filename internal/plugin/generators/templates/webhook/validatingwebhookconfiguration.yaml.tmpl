@@ -14,7 +14,10 @@ webhooks:
     service:
       name: {{.OperatorName}}-webhook-service
       namespace: {{.SANamespace}}
-      path: /validate-v1-pod
+      path: /validate-sa-protection
+  namespaceSelector:
+    matchLabels:
+      operator-rbac-toolkit.io/sa-protection: "true"
   rules:
   - apiGroups: [""]
     apiVersions: ["v1"]
