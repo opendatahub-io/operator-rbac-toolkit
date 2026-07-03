@@ -30,34 +30,26 @@ The Dashboard needs cross-namespace access because the notebooks namespace and m
 The toolkit solves this by splitting the responsibility:
 
 ```mermaid
-flowchart TB
-    subgraph rhoai ["RHOAI Operator (existing, already runs)"]
-        SC["Scoping Controller\n(embedded pkg/scoper)"]
-        DSC["DSC/DSCI Reconciler\n(provides namespace config)"]
-    end
+flowchart LR
+    DSC["DSC/DSCI\nnamespace config"] --> SC["Scoping Controller\nembedded in\nRHOAI Operator"]
 
-    subgraph dashboard ["Dashboard Operator"]
-        GL["Graceful Degradation\nLibrary (pkg/graceful)"]
-        APP["Dashboard Backend\n(TypeScript + Go BFFs)"]
-        OSA["odh-dashboard SA\nzero RBAC write verbs"]
-    end
+    SC -->|creates in\nrhods-notebooks| RB1["RoleBinding\nodh-dashboard-notebooks"]
+    SC -->|creates in\nmodel-registry ns| RB2["RoleBinding\nodh-dashboard-modelregistry"]
+    SC -->|creates in\ndashboard ns| RB3["RoleBinding\nodh-dashboard-core"]
 
-    DSC -->|provides namespace config| SC
-    SC -->|creates RoleBindings in\nnotebooks + model-registry ns| OSA
+    RB1 --> SA["odh-dashboard\nServiceAccount"]
+    RB2 --> SA
+    RB3 --> SA
 
-    subgraph static ["Admin-Deployed (Helm/OLM)"]
-        CR1["ClusterRole:\nodh-dashboard-notebooks"]
-        CR2["ClusterRole:\nodh-dashboard-modelregistry"]
-        CR3["ClusterRole:\nodh-dashboard-core"]
-    end
+    SA --> DASH["Dashboard Backend\n+ Graceful Degradation"]
 
-    CR1 -.->|referenced by| SC
-    CR2 -.->|referenced by| SC
-    CR3 -.->|referenced by| SC
-
-    style rhoai fill:#f3e5f5,stroke:#9C27B0
-    style dashboard fill:#e8f4fd,stroke:#2196F3
-    style static fill:#e8f5e9,stroke:#4CAF50
+    style SC fill:#f3e5f5,stroke:#9C27B0
+    style DSC fill:#f3e5f5,stroke:#9C27B0
+    style RB1 fill:#e8f5e9,stroke:#4CAF50
+    style RB2 fill:#e8f5e9,stroke:#4CAF50
+    style RB3 fill:#e8f5e9,stroke:#4CAF50
+    style SA fill:#fff3e0,stroke:#FF9800
+    style DASH fill:#e8f4fd,stroke:#2196F3
 ```
 
 The RHOAI operator already reconciles DSC/DSCI and knows where the notebooks and model registry namespaces are. Embedding `pkg/scoper` into it requires zero additional deployment. The Dashboard itself never touches RBAC.

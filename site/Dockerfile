@@ -13,10 +13,10 @@ RUN git config --global user.email "build@localhost" && \
     git init && git add -A && git commit -m "build" && \
     mkdocs build
 
-FROM registry.access.redhat.com/ubi9/httpd-24:latest
+FROM registry.access.redhat.com/ubi9/nginx-124:latest
 
-COPY --from=builder /build/site/ /var/www/html/
+COPY --from=builder /build/site/ /opt/app-root/src/
 
 EXPOSE 8080
 
-CMD ["httpd", "-D", "FOREGROUND"]
+CMD ["nginx", "-g", "daemon off;"]
