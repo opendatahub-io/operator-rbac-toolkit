@@ -42,6 +42,8 @@ theme:
     - toc.follow
 extra_css:
   - stylesheets/extra.css
+extra_javascript:
+  - javascripts/diagram-zoom.js
 plugins:
   - search
   - git-revision-date-localized:
@@ -73,6 +75,7 @@ nav:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quick-start.md
     - Choose Your Deployment: getting-started/choose-your-deployment.md
+    - Kubebuilder Plugin: getting-started/kubebuilder-plugin.md
   - Architecture:
     - Overview: architecture/overview.md
     - Graceful Degradation: architecture/graceful-degradation.md

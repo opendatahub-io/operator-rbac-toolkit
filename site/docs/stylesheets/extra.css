@@ -2,3 +2,84 @@
   height: 2rem;
   width: auto;
 }
+
+.diagram-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+}
+
+.diagram-overlay.active {
+  display: flex;
+}
+
+.diagram-overlay-controls {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  z-index: 10000;
+}
+
+.diagram-btn {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.diagram-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.diagram-overlay-content {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 90vw;
+  height: 85vh;
+  overflow: auto;
+}
+
+.diagram-overlay-content svg {
+  transition: transform 0.15s ease;
+}
+
+.diagram-hint {
+  position: absolute;
+  bottom: 0.25rem;
+  right: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--lighter);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+pre.mermaid:hover .diagram-hint,
+.mermaid:hover .diagram-hint {
+  opacity: 1;
+}
+
+pre.mermaid svg,
+.mermaid svg {
+  transition: filter 0.2s;
+}
+
+pre.mermaid:hover svg,
+.mermaid:hover svg {
+  filter: brightness(1.05);
+}
