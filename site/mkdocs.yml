@@ -87,6 +87,8 @@ nav:
     - SA Protection: architecture/sa-protection.md
     - Impersonation Guard: architecture/impersonation-guard.md
     - RBAC Audit: architecture/rbac-audit.md
+    - Modularization Alignment: architecture/modularization.md
+    - Upgrade Safety: architecture/upgrade-safety.md
   - Security:
     - Threat Model: security/threat-model.md
     - VAP Templates: security/vap-templates.md
