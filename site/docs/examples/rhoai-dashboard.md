@@ -54,6 +54,21 @@ flowchart LR
 
 The RHOAI operator already reconciles DSC/DSCI and knows where the notebooks and model registry namespaces are. Embedding `pkg/scoper` into it requires zero additional deployment. The Dashboard itself never touches RBAC.
 
+### RHOAI Operator SA: No New Permissions Required
+
+The RHOAI operator SA already has all the RBAC permissions needed to embed the scoping library. From `internal/controller/datasciencecluster/kubebuilder_rbac.go`:
+
+| Permission | Already granted | What the scoping library needs |
+|-----------|----------------|-------------------------------|
+| `rolebindings` | `verbs=*` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+| `clusterroles` | `verbs=*` | `get` (startup validation only) |
+| `odhdashboardconfigs` | `create;get;patch;watch;update;delete;list` | `get`, `list`, `watch` |
+| `namespaces` | `get;create;patch;delete;watch;update;list` | `get`, `list`, `watch` (for label selector) |
+
+The operator SA already has wildcard access on all RBAC resources. Embedding `pkg/scoper` adds zero new permission requirements.
+
+Dashboard's SA also needs no new permissions. It actually **loses** cluster-wide access (the ClusterRoleBinding gets replaced with namespace-scoped RoleBindings), reducing its blast radius.
+
 ## Step 1: Define the Static ClusterRoles
 
 Based on the audit, the Dashboard's cross-namespace permissions split into three scoped ClusterRoles:
