@@ -79,6 +79,26 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 			"gvk", target.WatchGVK.String(),
 			"targetSA", fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
 			"clusterRole", target.ClusterRoleName)
+
+		// Register label trigger controller if NamespaceLabelTrigger is configured
+		if target.NamespaceLabelTrigger != nil {
+			labelTriggerRec, err := NewLabelTriggerReconciler(mgr.GetClient(), target, denyList)
+			if err != nil {
+				return fmt.Errorf("creating label trigger reconciler for target %d: %w", i, err)
+			}
+
+			labelTriggerBuilder := ctrl.NewControllerManagedBy(mgr).
+				Named(fmt.Sprintf("label-trigger-%d-%s", i, target.ManagedRoleBindingName)).
+				For(&corev1.Namespace{})
+
+			if err := labelTriggerBuilder.Complete(labelTriggerRec); err != nil {
+				return fmt.Errorf("building label trigger controller for target %d: %w", i, err)
+			}
+
+			logger.Info("registered label trigger controller",
+				"targetSA", fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
+				"clusterRole", target.ClusterRoleName)
+		}
 	}
 
 	cleanupInterval := 5 * time.Minute
