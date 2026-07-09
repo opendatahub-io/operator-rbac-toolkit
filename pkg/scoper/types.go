@@ -13,6 +13,12 @@ type ScopingTarget struct {
 	ManagedRoleBindingName string
 	NamespaceSelector     *metav1.LabelSelector
 	TargetNamespaceSource *NamespaceSource
+
+	// WebhookProvisioning enables MutatingAdmissionWebhook provisioning (same-namespace only)
+	WebhookProvisioning bool
+
+	// NamespaceLabelTrigger pre-provisions RoleBindings when namespaces match this label selector
+	NamespaceLabelTrigger *metav1.LabelSelector
 }
 
 type NamespaceSource struct {
@@ -55,4 +61,16 @@ const (
 	// in the cluster.
 	ManagedLabelKey   = "operator-rbac-toolkit.io/managed"
 	ManagedLabelValue = "true"
+
+	// PendingOwnerAnnotationKey stores pending ownership info for webhook-created RoleBindings
+	// Format: namespace/name/GVK/RFC3339-timestamp
+	PendingOwnerAnnotationKey = "operator-rbac-toolkit.io/pending-owner"
+
+	// CreatedByAnnotationKey indicates which component created the RoleBinding
+	CreatedByAnnotationKey = "operator-rbac-toolkit.io/created-by"
+
+	// CreatedBy values
+	CreatedByWebhook      = "webhook"
+	CreatedByScoper       = "scoper"
+	CreatedByLabelTrigger = "label-trigger"
 )

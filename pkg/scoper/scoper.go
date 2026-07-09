@@ -124,6 +124,9 @@ func validateTarget(t ScopingTarget) error {
 			return fmt.Errorf("TargetNamespaceSource.FieldPath must start with \".spec.\" to prevent reading user-controlled fields, got %q", fp)
 		}
 	}
+	if t.WebhookProvisioning && t.TargetNamespaceSource != nil {
+		return fmt.Errorf("WebhookProvisioning cannot be used with TargetNamespaceSource (webhook is same-namespace only)")
+	}
 	return nil
 }
 

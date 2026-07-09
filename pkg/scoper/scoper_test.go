@@ -495,3 +495,22 @@ func TestDefaultDenyList_EmptyControllerNamespace(t *testing.T) {
 		t.Errorf("expected namespaces %v, got %v", expectedNamespaces, dl.Namespaces)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// validateTarget tests for new WebhookProvisioning field
+// ---------------------------------------------------------------------------
+
+func TestValidateTarget_RejectsWebhookWithTargetNamespaceSource(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:            schema.GroupVersionKind{Kind: "Foo"},
+		TargetSA:            types.NamespacedName{Name: "sa", Namespace: "ns"},
+		ClusterRoleName:     "role",
+		ManagedRoleBindingName: "binding",
+		WebhookProvisioning: true,
+		TargetNamespaceSource: &NamespaceSource{FieldPath: ".spec.namespace"},
+	}
+	err := validateTarget(target)
+	if err == nil {
+		t.Fatal("expected error for WebhookProvisioning + TargetNamespaceSource")
+	}
+}
