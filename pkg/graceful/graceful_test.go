@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -460,3 +461,187 @@ func TestOptionFunctions(t *testing.T) {
 // Verify StatusProvider interface is correctly implemented by testCR
 var _ StatusProvider = &testCR{}
 var _ client.Object = &testCR{}
+
+func TestDo_ForbiddenError_NoManagedRoleBindingName(t *testing.T) {
+	cr := newTestCR()
+	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder)
+
+	forbiddenErr := errors.NewForbidden(
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		"",
+		fmt.Errorf("user cannot list secrets in namespace \"test-ns\""),
+	)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR from fake client: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
+		return forbiddenErr
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != DefaultRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
+	}
+
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
+	if pg == nil {
+		t.Fatal("PermissionGranted condition not set after Forbidden error")
+	}
+	if pg.Status != metav1.ConditionFalse {
+		t.Errorf("PermissionGranted = %s, want False", pg.Status)
+	}
+	if pg.Reason != ReasonMissingPermissions {
+		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonMissingPermissions)
+	}
+}
+
+func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingMissing(t *testing.T) {
+	cr := newTestCR()
+	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder, WithManagedRoleBindingName("test-rolebinding"))
+
+	forbiddenErr := errors.NewForbidden(
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		"",
+		fmt.Errorf("user cannot list secrets in namespace \"test-ns\""),
+	)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR from fake client: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
+		return forbiddenErr
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != DefaultRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
+	}
+
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
+	if pg == nil {
+		t.Fatal("PermissionGranted condition not set after Forbidden error")
+	}
+	if pg.Status != metav1.ConditionFalse {
+		t.Errorf("PermissionGranted = %s, want False", pg.Status)
+	}
+	if pg.Reason != ReasonProvisioningPending {
+		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonProvisioningPending)
+	}
+}
+
+func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingExists(t *testing.T) {
+	cr := newTestCR()
+	recorder := record.NewFakeRecorder(10)
+	handler := NewHandler(recorder, WithManagedRoleBindingName("test-rolebinding"))
+
+	forbiddenErr := errors.NewForbidden(
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		"",
+		fmt.Errorf("user cannot list secrets in namespace \"test-ns\""),
+	)
+
+	// Create the RoleBinding in the fake client
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-rolebinding",
+			Namespace: "test-ns",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     "test-role",
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR, rb).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR from fake client: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
+		return forbiddenErr
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != DefaultRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
+	}
+
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
+	if pg == nil {
+		t.Fatal("PermissionGranted condition not set after Forbidden error")
+	}
+	if pg.Status != metav1.ConditionFalse {
+		t.Errorf("PermissionGranted = %s, want False", pg.Status)
+	}
+	if pg.Reason != ReasonPermissionDenied {
+		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonPermissionDenied)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
@@ -106,9 +107,31 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 	count := h.backoff.increment(backoffKey)
 	requeue := h.calculateBackoff(count)
 
+	// Determine the appropriate reason based on RoleBinding existence check
+	conditionReason := ReasonMissingPermissions
+	if h.opts.ManagedRoleBindingName != "" {
+		// Check if the expected RoleBinding exists
+		rb := &rbacv1.RoleBinding{}
+		rbKey := client.ObjectKey{
+			Name:      h.opts.ManagedRoleBindingName,
+			Namespace: obj.GetNamespace(),
+		}
+		if getErr := c.Get(ctx, rbKey, rb); getErr != nil {
+			if errors.IsNotFound(getErr) {
+				conditionReason = ReasonProvisioningPending
+			} else {
+				// If Get also returns Forbidden or another error, assume PermissionDenied
+				conditionReason = ReasonPermissionDenied
+			}
+		} else {
+			// RoleBinding exists, so this is a true permission denied
+			conditionReason = ReasonPermissionDenied
+		}
+	}
+
 	sp, ok := obj.(StatusProvider)
 	if ok {
-		SetPermissionGranted(sp, false, msg)
+		SetPermissionGrantedWithReason(sp, false, msg, conditionReason)
 		if updateErr := UpdateStatus(ctx, c, obj); updateErr != nil {
 			return ctrl.Result{}, fmt.Errorf("updating degraded status: %w", updateErr)
 		}

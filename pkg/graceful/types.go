@@ -14,6 +14,8 @@ const (
 	ReasonMissingPermissions      = "MissingPermissions"
 	ReasonInsufficientRBAC        = "InsufficientRBAC"
 	ReasonFullyOperational        = "FullyOperational"
+	ReasonProvisioningPending     = "ProvisioningPending"
+	ReasonPermissionDenied        = "PermissionDenied"
 
 	EventReasonPermissionDenied   = "PermissionDenied"
 	EventReasonPermissionRestored = "PermissionRestored"
@@ -51,9 +53,10 @@ type PermissionReport struct {
 }
 
 type Options struct {
-	RequeueAfter  time.Duration
-	MaxRequeue    time.Duration
-	BackoffFactor float64
+	RequeueAfter           time.Duration
+	MaxRequeue             time.Duration
+	BackoffFactor          float64
+	ManagedRoleBindingName string
 }
 
 func defaultOptions() Options {
@@ -84,6 +87,12 @@ func WithBackoffFactor(f float64) Option {
 			f = DefaultBackoffFactor
 		}
 		o.BackoffFactor = f
+	}
+}
+
+func WithManagedRoleBindingName(name string) Option {
+	return func(o *Options) {
+		o.ManagedRoleBindingName = name
 	}
 }
 

@@ -9,6 +9,10 @@ import (
 )
 
 func SetPermissionGranted(obj StatusProvider, granted bool, message string) {
+	SetPermissionGrantedWithReason(obj, granted, message, "")
+}
+
+func SetPermissionGrantedWithReason(obj StatusProvider, granted bool, message string, customReason string) {
 	if granted {
 		setCondition(obj, metav1.Condition{
 			Type:    ConditionTypePermissionGranted,
@@ -23,10 +27,14 @@ func SetPermissionGranted(obj StatusProvider, granted bool, message string) {
 			Message: message,
 		})
 	} else {
+		reason := ReasonMissingPermissions
+		if customReason != "" {
+			reason = customReason
+		}
 		setCondition(obj, metav1.Condition{
 			Type:    ConditionTypePermissionGranted,
 			Status:  metav1.ConditionFalse,
-			Reason:  ReasonMissingPermissions,
+			Reason:  reason,
 			Message: message,
 		})
 		setCondition(obj, metav1.Condition{
