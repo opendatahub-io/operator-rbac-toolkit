@@ -36,7 +36,7 @@ Modes 2 and 3 can be combined: label watch pre-provisions, webhook guarantees ne
 
 **Webhook scope limitation:** The webhook handles **same-namespace targets only** (CR namespace == RoleBinding namespace). Cross-namespace targets (`TargetNamespaceSource` set) are handled by the reactive scoper controller, which accepts the timing gap. This avoids the complexity of extracting field values from the CR body in the webhook, and avoids the ownership problem (the CR has no UID at webhook time, so annotation-based cross-namespace ownership can't be set). Cross-namespace targets should use the namespace label trigger for pre-provisioning when possible.
 
-**Near-zero vs zero:** The webhook creates the RoleBinding before the CR is persisted. However, the API server's RBAC authorizer uses an informer cache with a propagation delay (typically sub-second). The module operator's first reconciliation may still hit a brief window where the RoleBinding is persisted in etcd but not yet visible to the authorizer. Module operators should handle a single retry with short backoff (1s) on the first 403 even in webhook mode. The graceful degradation library handles this automatically.
+**Near-zero vs zero:** The webhook creates the RoleBinding before the CR is persisted. However, the API server's RBAC authorizer uses an informer cache with a propagation delay (typically sub-second, but can be longer on heavily loaded clusters). The module operator's first reconciliation may still hit a brief window where the RoleBinding is persisted in etcd but not yet visible to the authorizer. Module operators should handle a few retries with short exponential backoff (1s, 2s) during the propagation window. The graceful degradation library handles this automatically.
 
 ## 2. Webhook Architecture
 
@@ -50,14 +50,15 @@ API Server routes to MutatingAdmissionWebhook
     |
     v
 Webhook handler:
-  0. Is this a dry-run request? -> Allow CR, skip RoleBinding creation
   1. Is namespace denied? (deny-list check) -> Allow CR, no RoleBinding
   1.5. Does namespace match NamespaceSelector? (if configured) -> If not, allow CR, no RoleBinding
   2. Does RoleBinding already exist? (direct API Get, not cached) -> Allow CR, skip creation
   3. Does ClusterRole exist? -> If not, reject CR with clear error
-  4. Create RoleBinding in namespace X with ManagedLabel + pending-owner annotation (CR name/namespace/GVK)
+  3.5. Is this a dry-run request? -> Allow CR, skip RoleBinding creation (validation in steps 1-3 still runs so dry-run catches config errors)
+  4. Create RoleBinding in namespace X with ManagedLabel + pending-owner annotation (CR name/namespace/GVK/timestamp)
      - No OwnerReference set (CR has no UID yet at admission time, UID is assigned after persistence)
-     - If AlreadyExists error: treat as success (concurrent create from another replica or scoper)
+     - If AlreadyExists error: treat as success (concurrent create from another replica, scoper, or label trigger)
+     - If other create error: Allow CR anyway (fail-open on create errors), log the error. Reactive scoper creates the RoleBinding on next reconcile. Brief 403 window.
   5. Allow CR
     |
     v
@@ -71,7 +72,7 @@ CR persisted (now has UID) -> Scoper backfills OwnerReference on next reconcile 
 **Why a mutating webhook that doesn't mutate.** The webhook creates a RoleBinding as a side effect, not as a mutation of the admitted CR. This is an unusual pattern. The alternative (a validating webhook that checks "RoleBinding exists" relying on the reactive scoper) reintroduces the timing gap. The side-effect approach is chosen deliberately, with the following safeguards:
 
 - **Dry-run handling.** The webhook checks `req.DryRun` and skips RoleBinding creation when true. `kubectl apply --dry-run=server` must not create real resources.
-- **Reinvocation safety.** Set `reinvocationPolicy: Never` on the MutatingWebhookConfiguration to avoid redundant invocations from other mutating webhooks.
+- **Reinvocation safety.** Set `reinvocationPolicy: Never` (the default) on the MutatingWebhookConfiguration. Reinvocation would only trigger a redundant RoleBinding create, which is safely handled by AlreadyExists tolerance but wastes a round trip.
 - **AlreadyExists tolerance.** If the RoleBinding already exists (created by another webhook replica, the namespace label trigger, or the scoper), the create call returns `AlreadyExists`. The webhook treats this as success, not an error.
 - **Idempotent.** Step 2 checks for existing RoleBinding via direct (uncached) API Get. If it exists, skip creation entirely.
 
@@ -81,6 +82,8 @@ CR persisted (now has UID) -> Scoper backfills OwnerReference on next reconcile 
 - **Phase 2 (after production validation):** Switch to `failurePolicy: Fail` for environments that prefer guaranteed provisioning over availability. Document the blast radius: all configured GVKs become uncreatable during webhook downtime.
 
 This graduated approach avoids the "deploy fail-closed webhook on day one and block CR creation during the first operator upgrade" scenario.
+
+**Transition mechanics:** The `failurePolicy` is a field on the MutatingWebhookConfiguration resource. Transitioning from Ignore to Fail is a live update (`kubectl patch` or operator reconciliation). The API server picks up the change within its informer resync (typically <1s). Rollback is the reverse update. The configuration mechanism is a field on the operator's CR (e.g., `spec.rbacScoping.webhookFailurePolicy: Ignore|Fail`) that the operator reconciles into the MutatingWebhookConfiguration. Per-GVK fail policies are not supported in v2; it's all-or-nothing.
 
 **Scoped via webhook rules.** The MutatingWebhookConfiguration `rules` field lists only the GVKs from ScopingTargets that have `WebhookProvisioning: true`. Rules are generated at setup time from the Config.
 
@@ -92,25 +95,32 @@ The webhook sets the `ManagedLabelKey` label and a `pending-owner` annotation (`
 
 **Orphan handling:** If the CR creation fails after the webhook (a validating webhook rejects it, quota exceeded, etcd write failure), the RoleBinding exists but the CR does not. Cleanup:
 
-- **Scoper orphan scan.** The startup orphan scan and periodic cleanup (default 5 minutes) check whether the CR referenced in the `pending-owner` annotation exists. If it doesn't, the RoleBinding is deleted. For faster cleanup, a configurable `pending-owner-ttl` (default 30 seconds) can be set: if the annotation is older than the TTL and no CR exists, delete immediately without waiting for the periodic scan.
+- **Scoper orphan scan.** The startup orphan scan and periodic cleanup (default 5 minutes) check whether the CR referenced in the `pending-owner` annotation exists. If it doesn't and the `pending-owner-since` timestamp exceeds the TTL (default 30 seconds), the RoleBinding is deleted. The `pending-owner` annotation format includes a timestamp: `namespace/name/GVK/RFC3339-timestamp`.
+
+**Important: the backfill reconcile path (triggered by RoleBinding watch events) must NOT delete orphans.** When the backfill path sees a `pending-owner` annotation but the CR doesn't exist yet (NotFound), it requeues after 2 seconds and does nothing else. Orphan deletion is exclusively the periodic scan's responsibility with TTL enforcement. This prevents the scoper from deleting a RoleBinding before the CR is persisted (the CR creation and RoleBinding creation are concurrent events).
 
 ### Webhook and scoper coordination
 
 Both the webhook and the scoper can create the same RoleBinding. Coordination is via idempotent creates:
 
-- The webhook creates RoleBindings with the deterministic `ManagedRoleBindingName`, `ManagedLabelKey` label, and OwnerReference.
-- The scoper reconciler checks if the RoleBinding exists before creating. If it exists (created by the webhook), it verifies the spec (drift recovery) and backfills the OwnerReference if needed.
-- Both handle `AlreadyExists` as success.
-- A `created-by` annotation (`operator-rbac-toolkit.io/created-by: webhook` or `scoper`) aids debuggability but is not load-bearing.
+- The webhook creates RoleBindings with the deterministic `ManagedRoleBindingName`, `ManagedLabelKey` label, `pending-owner` annotation, and `created-by: webhook` annotation. No OwnerReference (CR has no UID at webhook time).
+- The scoper reconciler checks if the RoleBinding exists before creating. If it exists (created by the webhook or label trigger), it verifies the spec (drift recovery) and backfills the OwnerReference when the CR exists and has a UID. The backfill sets the OwnerReference and removes the `pending-owner` annotation in a single Update call to avoid split-state.
+- Both the webhook, scoper, and label trigger handle `AlreadyExists` as success.
+- A `created-by` annotation (`operator-rbac-toolkit.io/created-by: webhook`, `scoper`, or `label-trigger`) aids debuggability.
+- **Concurrent label-trigger + webhook:** If both fire simultaneously for the same namespace, one gets `AlreadyExists`. If the label trigger wins, no `pending-owner` annotation is set. The scoper sets OwnerReference when it processes the CR creation event (normal reconcile path, no pending-owner needed).
+
+**Config validation:** `WebhookProvisioning: true` is rejected when `TargetNamespaceSource != nil`. The webhook handles same-namespace targets only. This is enforced in `validateTarget()`.
+
+**Unknown GVK handling:** If the webhook receives a request for a GVK that doesn't match any configured ScopingTarget (possible during rolling updates), it allows the CR with no side effect and logs a warning.
 
 ### Webhook registration and integration
 
 Since the toolkit is a Go library embedded in the host operator:
 
 - **Webhook handler.** The library exposes a `ProvisioningWebhookHandler` that implements `admission.Handler`. The host operator registers it on its webhook server alongside the existing SA protection webhook.
-- **Webhook path.** `/mutate-rbac-scoper-v1` (distinct from the SA protection webhook path `/validate-sa-protection`).
+- **Webhook path.** `/mutate-rbac-scoper` (distinct from the SA protection webhook path `/validate-sa-protection`).
 - **TLS certificates.** The webhook uses the host operator's existing cert infrastructure (cert-manager, OpenShift service-ca, or manual). No additional cert management is needed since it runs on the same webhook server.
-- **MutatingWebhookConfiguration.** Generated by the kubebuilder plugin or deployed via the operator's manifests. The `rules` field is static (generated from known ScopingTargets at build time). If targets are added at runtime, the MutatingWebhookConfiguration must be updated (the scoper Setup function can reconcile it).
+- **MutatingWebhookConfiguration.** Generated by the kubebuilder plugin or deployed via the operator's manifests. The `rules` field is static (generated from known ScopingTargets at build time). Runtime target addition is not supported in v2; targets are fixed at startup. The handler allows requests for unknown GVKs (logs a warning, no side effect).
 - **ServiceAccount.** The webhook runs in the host operator process and shares the host operator's SA. For RHOAI, the operator SA already has `verbs=*` on all RBAC resources. No new permissions needed.
 
 ## 3. Graceful Degradation Improvements
@@ -134,7 +144,7 @@ This requires passing the `ManagedRoleBindingName` to the graceful handler, whic
 
 For reactive mode (no webhook), the handler sets condition to `ProvisioningPending` instead of `Degraded` on the first 403. Status shows "Waiting for RBAC provisioning" instead of "Permission denied." Transitions to `Degraded` only after a configurable timeout (default 60s). The user sees "setting up" not "broken."
 
-For webhook mode, a single 403 from informer propagation delay gets `ProvisioningPending` with a 1-second requeue. If the 403 persists beyond 5 seconds (propagation should be sub-second), it transitions to `PermissionDenied`.
+For webhook mode, 403s from informer propagation delay get `ProvisioningPending` with exponential backoff requeue (1s, 2s). If the 403 persists beyond 5 seconds (propagation is typically sub-second but can be longer under load), it transitions to `PermissionDenied`. This gives the authorizer cache multiple cycles to sync before escalating.
 
 ## 4. Prometheus Metrics
 
@@ -153,7 +163,7 @@ For webhook mode, a single 403 from informer propagation delay gets `Provisionin
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `rbac_scoper_webhook_requests_total` | Counter | Webhook invocations, by GVK and result (allowed/rejected/skipped-dryrun) |
+| `rbac_scoper_webhook_requests_total` | Counter | Webhook invocations, by GVK, result (allowed/rejected/skipped-dryrun), and rejection reason (clusterrole_missing/create_failed/none) |
 | `rbac_scoper_webhook_duration_seconds` | Histogram | Webhook latency (should be <100ms) |
 | `rbac_scoper_webhook_rolebinding_created_total` | Counter | RoleBindings created via webhook path |
 | `rbac_scoper_webhook_already_exists_total` | Counter | AlreadyExists responses (concurrent create, not an error) |
@@ -200,6 +210,7 @@ For webhook mode, a single 403 from informer propagation delay gets `Provisionin
 | Namespace deletion during webhook processing | RoleBinding creation may fail (namespace terminating). | Webhook handles NotFound/Forbidden on namespace as "allow CR, skip RoleBinding." The namespace is going away anyway. |
 | Operator upgrade (rolling update) | Brief window with zero webhook replicas (between old pod termination and new pod readiness). With Ignore: reactive fallback. With Fail: CR creation blocked. | PDB minAvailable: 1 minimizes window. failurePolicy: Ignore eliminates user impact. |
 | Auto-retrying controller (KServe) during webhook outage with Fail | Controller fills work queue with rejected creates. Alert storms from operator error metrics. Controllers with finite retry budgets may give up. | After recovery: controllers with exponential backoff resume automatically. For controllers that gave up: touch the parent resource to re-trigger reconciliation, or restart the controller pod. |
+| Concurrent label trigger + webhook for same namespace | Both attempt to create the same RoleBinding simultaneously. One gets AlreadyExists. | AlreadyExists treated as success by both paths. If label trigger wins, no pending-owner annotation. Scoper sets OwnerReference when CR creation event triggers normal reconcile path. |
 
 ### Recovery from webhook outage (failurePolicy: Fail)
 
@@ -286,7 +297,16 @@ When enabled via `NamespaceLabelTrigger`, the scoper watches namespace events. W
 
 **AlreadyExists tolerance:** If the RoleBinding already exists (created by the webhook or scoper), the label trigger treats `AlreadyExists` as success.
 
+**Lifecycle:** Label-trigger-created RoleBindings have no OwnerReference and no `pending-owner` annotation (there is no CR to own them). Their lifecycle is tied to the namespace label:
+
+- **Label added:** RoleBindings created for all matching ScopingTargets, with `created-by: label-trigger` annotation.
+- **Label removed:** The scoper watches namespace label changes. When a namespace no longer matches the `NamespaceLabelTrigger` selector, the scoper deletes all label-trigger-created RoleBindings in that namespace (identified by `created-by: label-trigger` annotation).
+- **CR created later:** When a CR is created in a pre-provisioned namespace, the scoper's regular reconciliation adds an OwnerReference to the existing RoleBinding, transitioning it from label-managed to CR-managed lifecycle. The `created-by` annotation is updated to `scoper`.
+- **No CR ever created:** The RoleBinding persists as long as the label is present. This is intentional: the namespace is marked as "AI related" and the permissions are pre-provisioned. Removing the label cleans up.
+
 **Security note:** On clusters without the `protect-rbac-allowed-label` VAP, any user with `update namespaces` can trigger RoleBinding creation by labeling a namespace. The label trigger should not be used in multi-tenant environments without the VAP deployed.
+
+**Metrics:** `rbac_scoper_label_trigger_evaluations_total` counter with labels `result` (created/already-exists/denied/selector-mismatch) tracks label trigger activity for observability.
 
 ## 8. What Doesn't Change
 
