@@ -53,12 +53,12 @@ Webhook handler:
   1. Is namespace denied? (deny-list check) -> Allow CR, no RoleBinding
   1.5. Does namespace match NamespaceSelector? (if configured) -> If not, allow CR, no RoleBinding
   2. Does RoleBinding already exist? (direct API Get, not cached) -> Allow CR, skip creation
-  3. Does ClusterRole exist? -> If not, reject CR with clear error
+  3. Does ClusterRole exist? -> If not, allow CR but log warning and emit event. The reactive scoper will also fail, surfacing ClusterRoleMissing metric. No RoleBinding created.
   3.5. Is this a dry-run request? -> Allow CR, skip RoleBinding creation (validation in steps 1-3 still runs so dry-run catches config errors)
-  4. Create RoleBinding in namespace X with ManagedLabel + pending-owner annotation (CR name/namespace/GVK/timestamp)
+  4. Create RoleBinding in namespace X with ManagedLabel + pending-owner annotation (namespace/name/GVK/RFC3339-timestamp)
      - No OwnerReference set (CR has no UID yet at admission time, UID is assigned after persistence)
      - If AlreadyExists error: treat as success (concurrent create from another replica, scoper, or label trigger)
-     - If other create error: Allow CR anyway (fail-open on create errors), log the error. Reactive scoper creates the RoleBinding on next reconcile. Brief 403 window.
+     - If other create error: Allow CR anyway, log the error. Reactive scoper creates the RoleBinding on next reconcile. Brief 403 window.
   5. Allow CR
     |
     v
@@ -97,7 +97,7 @@ The webhook sets the `ManagedLabelKey` label and a `pending-owner` annotation (`
 
 - **Scoper orphan scan.** The startup orphan scan and periodic cleanup (default 5 minutes) check whether the CR referenced in the `pending-owner` annotation exists. If it doesn't and the `pending-owner-since` timestamp exceeds the TTL (default 30 seconds), the RoleBinding is deleted. The `pending-owner` annotation format includes a timestamp: `namespace/name/GVK/RFC3339-timestamp`.
 
-**Important: the backfill reconcile path (triggered by RoleBinding watch events) must NOT delete orphans.** When the backfill path sees a `pending-owner` annotation but the CR doesn't exist yet (NotFound), it requeues after 2 seconds and does nothing else. Orphan deletion is exclusively the periodic scan's responsibility with TTL enforcement. This prevents the scoper from deleting a RoleBinding before the CR is persisted (the CR creation and RoleBinding creation are concurrent events).
+**Important: the backfill reconcile path (triggered by RoleBinding watch events) must NOT delete orphans.** When the backfill path sees a `pending-owner` annotation but the CR doesn't exist yet (NotFound), it requeues after 2 seconds. If the `pending-owner-since` timestamp is older than the pending-owner TTL (default 30 seconds), the backfill path stops requeueing and defers cleanup to the periodic orphan scan. This caps unnecessary requeues at ~15 per orphan instead of running indefinitely. Orphan deletion is exclusively the periodic scan's responsibility with TTL enforcement. This prevents the scoper from deleting a RoleBinding before the CR is persisted (the CR creation and RoleBinding creation are concurrent events).
 
 ### Webhook and scoper coordination
 
@@ -202,8 +202,8 @@ For webhook mode, 403s from informer propagation delay get `ProvisioningPending`
 | Webhook replicas down (failurePolicy: Fail) | CR creation blocked for configured GVKs. Existing workloads unaffected. | Webhook pods reschedule. Auto-retrying controllers (KServe) resume on recovery. Document maximum acceptable downtime. |
 | Scoper controller down | Webhook still provisions same-namespace RoleBindings. Cross-namespace provisioning paused. Cleanup paused (temporary over-grants). | Leader election failover or pod reschedule. Full resync on startup. |
 | API server can't reach webhook | With Ignore: CRs admitted, reactive fallback. With Fail: CR creation blocked. | Standard K8s webhook availability pattern. |
-| RoleBinding creation fails in webhook | With Ignore: CR admitted, reactive fallback. With Fail: CR creation rejected with specific error message. | User retries. Admin checks scoper logs/events/metrics. |
-| ClusterRole deleted at runtime | Webhook rejects new CRs (Fail) or allows them without RoleBinding (Ignore). Existing RoleBindings become non-functional. | RBAC audit detects at next scan. Metric `clusterrole_missing` fires alert. |
+| RoleBinding creation fails in webhook | CR admitted (webhook is always fail-open on create errors). Reactive scoper creates RoleBinding on next reconcile. Brief 403 window. | Admin checks scoper logs/events/metrics for the create error. |
+| ClusterRole deleted at runtime | Webhook allows CR but skips RoleBinding creation (logs warning, emits ClusterRoleMissing event). Existing RoleBindings become non-functional. | RBAC audit detects at next scan. Metric `clusterrole_missing` fires alert. Admin redeploys the ClusterRole manifest. |
 | Webhook TLS certificate expiry/rotation | API server can't TLS-handshake with webhook. Same as "can't reach webhook." | Use host operator's cert-manager or OpenShift service-ca for automatic rotation. Alert on cert expiry via webhook metric or cert-manager metrics. |
 | etcd latency spike (>10s) | Webhook RoleBinding create times out. With Ignore: CR admitted, reactive fallback. With Fail: CR rejected. Possible orphan if write completes after timeout. | etcd recovers. Orphan cleaned by scoper on next scan. |
 | Webhook config out-of-sync during rolling update | Old replica serves stale ScopingTarget config. May create RoleBinding with wrong ClusterRole. | Scoper drift recovery corrects on next reconcile. Keep rolling update maxUnavailable: 1 to minimize window. |
@@ -301,8 +301,9 @@ When enabled via `NamespaceLabelTrigger`, the scoper watches namespace events. W
 
 - **Label added:** RoleBindings created for all matching ScopingTargets, with `created-by: label-trigger` annotation.
 - **Label removed:** The scoper watches namespace label changes. When a namespace no longer matches the `NamespaceLabelTrigger` selector, the scoper deletes all label-trigger-created RoleBindings in that namespace (identified by `created-by: label-trigger` annotation).
-- **CR created later:** When a CR is created in a pre-provisioned namespace, the scoper's regular reconciliation adds an OwnerReference to the existing RoleBinding, transitioning it from label-managed to CR-managed lifecycle. The `created-by` annotation is updated to `scoper`.
+- **CR created later:** When a CR is created in a pre-provisioned namespace, the webhook or scoper finds the RoleBinding already exists (AlreadyExists tolerance). The RoleBinding stays label-managed (no OwnerReference added). This is intentional: if the CR is later deleted, the RoleBinding persists because the namespace is still labeled. The pre-provisioning guarantee is preserved across the full CR lifecycle.
 - **No CR ever created:** The RoleBinding persists as long as the label is present. This is intentional: the namespace is marked as "AI related" and the permissions are pre-provisioned. Removing the label cleans up.
+- **Label-managed vs CR-managed:** Label-trigger-created RoleBindings stay label-managed for their entire lifecycle. They are never converted to CR-managed via OwnerReference. This avoids the problem where CR deletion would GC the RoleBinding and leave the labeled namespace without pre-provisioned permissions until the next resync.
 
 **Security note:** On clusters without the `protect-rbac-allowed-label` VAP, any user with `update namespaces` can trigger RoleBinding creation by labeling a namespace. The label trigger should not be used in multi-tenant environments without the VAP deployed.
 
