@@ -127,6 +127,11 @@ func (r *ScopingReconciler) ensureRoleBinding(ctx context.Context, cr *unstructu
 		return err
 	}
 
+	// Backfill pending-owner annotation to OwnerReference
+	if err := r.backfillPendingOwner(ctx, cr, targetNamespace); err != nil {
+		return err
+	}
+
 	if r.isSameNamespace(cr, targetNamespace) {
 		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			// Re-fetch after drift correction since ensureRoleBindingSpec may have
@@ -314,4 +319,90 @@ func extractFieldValue(obj *unstructured.Unstructured, fieldPath string) (string
 		return "", fmt.Errorf("field %s not found or empty", fieldPath)
 	}
 	return val, nil
+}
+
+// parsePendingOwner parses the pending-owner annotation format:
+// namespace/name/group/version/kind/RFC3339-timestamp
+func parsePendingOwner(annotation string) (namespace, name string, timestamp time.Time, err error) {
+	parts := strings.Split(annotation, "/")
+	if len(parts) < 6 {
+		return "", "", time.Time{}, fmt.Errorf("invalid pending-owner format: expected at least 6 parts, got %d", len(parts))
+	}
+
+	namespace = parts[0]
+	name = parts[1]
+	// parts[2] = group, parts[3] = version, parts[4] = kind (not needed for matching)
+	timestampStr := parts[5]
+
+	timestamp, err = time.Parse(time.RFC3339, timestampStr)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("invalid timestamp in pending-owner: %w", err)
+	}
+
+	return namespace, name, timestamp, nil
+}
+
+// backfillPendingOwner checks if a RoleBinding has a pending-owner annotation
+// and backfills it to an OwnerReference if it references the current CR.
+func (r *ScopingReconciler) backfillPendingOwner(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string) error {
+	logger := log.FromContext(ctx)
+	rbName := types.NamespacedName{
+		Name:      r.Target.ManagedRoleBindingName,
+		Namespace: targetNamespace,
+	}
+
+	// Only backfill for same-namespace scenarios
+	if !r.isSameNamespace(cr, targetNamespace) {
+		return nil
+	}
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		rb := &rbacv1.RoleBinding{}
+		if err := r.Get(ctx, rbName, rb); err != nil {
+			return err
+		}
+
+		pendingOwnerAnnotation, hasPendingOwner := rb.Annotations[PendingOwnerAnnotationKey]
+		if !hasPendingOwner {
+			return nil
+		}
+
+		// Parse the pending-owner annotation
+		pendingNS, pendingName, timestamp, err := parsePendingOwner(pendingOwnerAnnotation)
+		if err != nil {
+			logger.Error(err, "failed to parse pending-owner annotation", "annotation", pendingOwnerAnnotation)
+			return nil
+		}
+
+		// Check if the pending-owner references this CR
+		if pendingNS != cr.GetNamespace() || pendingName != cr.GetName() {
+			// Not for this CR. Check TTL to decide if we should keep requeueing.
+			const pendingOwnerTTL = 30 * time.Second
+			if time.Since(timestamp) > pendingOwnerTTL {
+				// Past TTL, stop requeueing (defer to periodic cleanup)
+				logger.V(1).Info("pending-owner past TTL and doesn't match CR, skipping backfill",
+					"rolebinding", rbName, "pending", fmt.Sprintf("%s/%s", pendingNS, pendingName))
+				return nil
+			}
+			// Within TTL, requeue
+			logger.V(1).Info("pending-owner doesn't match CR, requeueing",
+				"rolebinding", rbName, "pending", fmt.Sprintf("%s/%s", pendingNS, pendingName))
+			return fmt.Errorf("pending-owner doesn't match CR, requeue")
+		}
+
+		// CR exists and has UID, backfill
+		if cr.GetUID() == "" {
+			logger.V(1).Info("CR has no UID yet, skipping backfill", "rolebinding", rbName)
+			return nil
+		}
+
+		// Set OwnerReference and remove pending-owner annotation
+		logger.Info("backfilling pending-owner to OwnerReference", "rolebinding", rbName, "owner", fmt.Sprintf("%s/%s", cr.GetNamespace(), cr.GetName()))
+		if err := controllerutil.SetOwnerReference(cr, rb, r.Scheme()); err != nil {
+			return fmt.Errorf("setting owner reference: %w", err)
+		}
+		delete(rb.Annotations, PendingOwnerAnnotationKey)
+
+		return r.Update(ctx, rb)
+	})
 }
