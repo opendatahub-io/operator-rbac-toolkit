@@ -86,6 +86,7 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 					return ctrl.Result{}, fmt.Errorf("updating status after permission restored: %w", updateErr)
 				}
 				h.recorder.Event(obj, corev1.EventTypeNormal, EventReasonPermissionRestored, "Permission restored")
+				permissionRestoredTotal.Inc()
 			}
 		}
 		return ctrl.Result{}, nil
@@ -97,6 +98,10 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 
 	msg := parseForbiddenMessage(err)
 	backoffKey := backoffKeyFromError(err)
+
+	// Extract resource/verb/reason from error for metrics
+	resource, verb, reason := extractForbiddenDetails(err)
+	permissionDeniedTotal.WithLabelValues(resource, verb, reason).Inc()
 
 	count := h.backoff.increment(backoffKey)
 	requeue := h.calculateBackoff(count)
@@ -156,4 +161,38 @@ func parseForbiddenMessage(err error) string {
 		return strings.TrimSpace(s[idx:])
 	}
 	return s
+}
+
+func extractForbiddenDetails(err error) (resource, verb, reason string) {
+	if statusErr, ok := err.(*errors.StatusError); ok {
+		d := statusErr.ErrStatus.Details
+		if d != nil {
+			resource = d.Kind
+			if d.Group != "" {
+				resource = d.Group + "/" + resource
+			}
+			// Verb is not in Details, try to extract from message
+			msg := statusErr.ErrStatus.Message
+			verb = extractVerbFromMessage(msg)
+			reason = string(statusErr.ErrStatus.Reason)
+			return
+		}
+	}
+	// Fallback to parsing error string
+	resource = "unknown"
+	verb = "unknown"
+	reason = "unknown"
+	return
+}
+
+func extractVerbFromMessage(msg string) string {
+	// Common patterns: "cannot get ...", "cannot list ...", "cannot create ..."
+	verbs := []string{"get", "list", "create", "update", "delete", "patch", "watch"}
+	lowerMsg := strings.ToLower(msg)
+	for _, v := range verbs {
+		if strings.Contains(lowerMsg, "cannot "+v) || strings.Contains(lowerMsg, v+" ") {
+			return v
+		}
+	}
+	return "unknown"
 }

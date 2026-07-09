@@ -2,6 +2,7 @@ package scoper
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -44,34 +45,42 @@ func (r *CleanupReconciler) NeedLeaderElection() bool {
 func (r *CleanupReconciler) runCleanup(ctx context.Context) {
 	logger := log.Log.WithName("scoper-cleanup")
 
+	totalOrphans := 0
 	for _, target := range r.Targets {
 		// No field indexer is registered for RoleBindings, so always use
 		// client-side filtering to avoid silent failures.
-		if err := r.listAndCleanup(ctx, target); err != nil {
+		count, err := r.listAndCleanup(ctx, target)
+		if err != nil {
 			logger.Error(err, "cleanup failed for target", "roleBinding", target.ManagedRoleBindingName)
 		}
+		totalOrphans += count
 	}
+	orphanRoleBindings.Set(float64(totalOrphans))
 }
 
-func (r *CleanupReconciler) listAndCleanup(ctx context.Context, target ScopingTarget) error {
+func (r *CleanupReconciler) listAndCleanup(ctx context.Context, target ScopingTarget) (int, error) {
 	rbList := &rbacv1.RoleBindingList{}
 	if err := r.List(ctx, rbList, client.MatchingLabels{ManagedLabelKey: ManagedLabelValue}); err != nil {
-		return err
+		return 0, err
 	}
+	orphanCount := 0
 	for _, rb := range rbList.Items {
 		if rb.Name == target.ManagedRoleBindingName {
-			r.cleanupRoleBinding(ctx, &rb, target)
+			isOrphan := r.cleanupRoleBinding(ctx, &rb, target)
+			if isOrphan {
+				orphanCount++
+			}
 		}
 	}
-	return nil
+	return orphanCount, nil
 }
 
-func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.RoleBinding, target ScopingTarget) {
+func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.RoleBinding, target ScopingTarget) bool {
 	logger := log.Log.WithName("scoper-cleanup")
 
 	annotation := rb.Annotations[OwnerAnnotationKey]
 	if annotation == "" {
-		return
+		return false
 	}
 
 	entries := ParseOwnerAnnotation(annotation)
@@ -88,21 +97,27 @@ func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.R
 	}
 
 	if len(validEntries) == len(entries) {
-		return
+		return false
 	}
 
 	if len(validEntries) == 0 {
 		logger.Info("deleting orphan RoleBinding", "namespace", rb.Namespace, "name", rb.Name)
 		if err := r.Delete(ctx, rb); err != nil && !apierrors.IsNotFound(err) {
 			logger.Error(err, "failed to delete orphan RoleBinding")
+			return false
 		}
-		return
+		roleBindingDeletedTotal.WithLabelValues(
+			fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
+			rb.Namespace,
+		).Inc()
+		return true
 	}
 
 	rb.Annotations[OwnerAnnotationKey] = FormatOwnerAnnotation(validEntries)
 	if err := r.Update(ctx, rb); err != nil {
 		logger.Error(err, "failed to update RoleBinding annotations")
 	}
+	return false
 }
 
 func (r *CleanupReconciler) isOwnerValid(ctx context.Context, entry OwnerEntry, target ScopingTarget, rbNamespace string) bool {

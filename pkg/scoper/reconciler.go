@@ -50,6 +50,11 @@ func NewScopingReconciler(c client.Client, target ScopingTarget, denyList DenyLi
 }
 
 func (r *ScopingReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	start := time.Now()
+	defer func() {
+		reconcileDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	logger := log.FromContext(ctx)
 
 	cr := &unstructured.Unstructured{}
@@ -80,8 +85,10 @@ func (r *ScopingReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		logger.Error(err, "ClusterRole validation failed, requeueing")
 		r.recorder.Eventf(cr, corev1.EventTypeWarning, "ClusterRoleValidationFailed",
 			"ClusterRole %q validation failed: %v", r.Target.ClusterRoleName, err)
+		clusterRoleMissing.WithLabelValues(r.Target.ClusterRoleName).Set(1)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	clusterRoleMissing.WithLabelValues(r.Target.ClusterRoleName).Set(0)
 
 	return ctrl.Result{}, r.ensureRoleBinding(ctx, cr, targetNamespace)
 }
@@ -258,7 +265,21 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 	}
 
 	logger.Info("creating RoleBinding", "namespace", targetNamespace, "name", r.Target.ManagedRoleBindingName)
-	return r.Create(ctx, rb)
+	if err := r.Create(ctx, rb); err != nil {
+		return err
+	}
+	source := "reconciler"
+	if r.isSameNamespace(cr, targetNamespace) {
+		source = "reconciler-owner-ref"
+	} else {
+		source = "reconciler-annotation"
+	}
+	roleBindingCreatedTotal.WithLabelValues(
+		fmt.Sprintf("%s/%s", r.Target.TargetSA.Namespace, r.Target.TargetSA.Name),
+		targetNamespace,
+		source,
+	).Inc()
+	return nil
 }
 
 func (r *ScopingReconciler) ensureOwnerReference(ctx context.Context, cr *unstructured.Unstructured, rb *rbacv1.RoleBinding) error {
