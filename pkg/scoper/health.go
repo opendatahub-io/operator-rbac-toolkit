@@ -1,7 +1,6 @@
 package scoper
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,6 +26,7 @@ type RBACHealthResponse struct {
 	Healthy           bool                 `json:"healthy"`
 	WebhookRegistered bool                 `json:"webhookRegistered"`
 	LastFullResync    string               `json:"lastFullResync"`
+	Error             string               `json:"error,omitempty"`
 }
 
 // RBACHealthHandler returns an http.Handler that serves RBAC health status as JSON.
@@ -87,6 +87,10 @@ func RBACHealthHandler(cfg Config, c client.Client) http.Handler {
 			WebhookRegistered: false, // placeholder, webhook registration check can be added later
 			LastFullResync:    "",     // placeholder for future resync tracking
 		}
+		if listErr != nil {
+			response.Healthy = false
+			response.Error = listErr.Error()
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -114,26 +118,4 @@ func RBACHealthzCheck(cfg Config, c client.Client) healthz.Checker {
 		}
 		return nil
 	}
-}
-
-// countManagedRoleBindings counts RoleBindings with the managed label for a specific target.
-func countManagedRoleBindings(ctx context.Context, c client.Client, targetName string) (int, error) {
-	rbList := &rbacv1.RoleBindingList{}
-
-	// List all RoleBindings with the managed label
-	if err := c.List(ctx, rbList, client.MatchingLabels{
-		ManagedLabelKey: ManagedLabelValue,
-	}); err != nil {
-		return 0, fmt.Errorf("failed to list managed RoleBindings: %w", err)
-	}
-
-	count := 0
-	for _, rb := range rbList.Items {
-		// Filter by target name (the RoleBinding name matches ManagedRoleBindingName)
-		if rb.Name == targetName {
-			count++
-		}
-	}
-
-	return count, nil
 }

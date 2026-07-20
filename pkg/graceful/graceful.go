@@ -222,7 +222,8 @@ func extractForbiddenDetails(err error) (resource, verb, reason string) {
 
 func extractVerbFromMessage(msg string) string {
 	// Common patterns: "cannot get ...", "cannot list ...", "cannot create ..."
-	verbs := []string{"get", "list", "create", "update", "delete", "patch", "watch"}
+	// deletecollection must be checked before delete so the longer match is tried first.
+	verbs := []string{"get", "list", "create", "update", "deletecollection", "delete", "patch", "watch"}
 	lowerMsg := strings.ToLower(msg)
 	for _, v := range verbs {
 		if strings.Contains(lowerMsg, "cannot "+v+" ") {

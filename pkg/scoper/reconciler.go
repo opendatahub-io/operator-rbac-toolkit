@@ -90,7 +90,11 @@ func (r *ScopingReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	}
 	clusterRoleMissing.WithLabelValues(r.Target.ClusterRoleName).Set(0)
 
-	return ctrl.Result{}, r.ensureRoleBinding(ctx, cr, targetNamespace)
+	if err := r.ensureRoleBinding(ctx, cr, targetNamespace); err != nil {
+		reconcileErrorsTotal.WithLabelValues("rolebinding").Inc()
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
 }
 
 func (r *ScopingReconciler) isNamespaceAllowed(ctx context.Context, namespace string) bool {
@@ -272,6 +276,10 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 
 	logger.Info("creating RoleBinding", "namespace", targetNamespace, "name", r.Target.ManagedRoleBindingName)
 	if err := r.Create(ctx, rb); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Another controller or concurrent reconcile created it, treat as success
+			return nil
+		}
 		return err
 	}
 	source := "reconciler"
@@ -377,18 +385,13 @@ func (r *ScopingReconciler) backfillPendingOwner(ctx context.Context, cr *unstru
 
 		// Check if the pending-owner references this CR
 		if pendingNS != cr.GetNamespace() || pendingName != cr.GetName() {
-			// Not for this CR. Check TTL to decide if we should keep requeueing.
-			const pendingOwnerTTL = 30 * time.Second
-			if time.Since(timestamp) > pendingOwnerTTL {
-				// Past TTL, stop requeueing (defer to periodic cleanup)
-				logger.V(1).Info("pending-owner past TTL and doesn't match CR, skipping backfill",
-					"rolebinding", rbName, "pending", fmt.Sprintf("%s/%s", pendingNS, pendingName))
-				return nil
-			}
-			// Within TTL, requeue
-			logger.V(1).Info("pending-owner doesn't match CR, requeueing",
+			// Not for this CR. Skip backfill and defer to periodic cleanup.
+			// Returning nil avoids unnecessary requeues for CRs that don't own
+			// this RoleBinding.
+			_ = timestamp // timestamp used by cleanup, not needed here
+			logger.V(1).Info("pending-owner doesn't match CR, skipping backfill",
 				"rolebinding", rbName, "pending", fmt.Sprintf("%s/%s", pendingNS, pendingName))
-			return fmt.Errorf("pending-owner doesn't match CR, requeue")
+			return nil
 		}
 
 		// CR exists and has UID, backfill

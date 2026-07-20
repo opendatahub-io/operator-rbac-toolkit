@@ -517,6 +517,21 @@ func TestValidateTarget_RejectsWebhookWithTargetNamespaceSource(t *testing.T) {
 	}
 }
 
+func TestValidateTarget_RejectsLabelTriggerWithTargetNamespaceSource(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:            schema.GroupVersionKind{Kind: "Foo"},
+		TargetSA:            types.NamespacedName{Name: "sa", Namespace: "ns"},
+		ClusterRoleName:     "role",
+		ManagedRoleBindingName: "binding",
+		NamespaceLabelTrigger: &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
+		TargetNamespaceSource: &NamespaceSource{FieldPath: ".spec.namespace"},
+	}
+	err := validateTarget(target)
+	if err == nil {
+		t.Fatal("expected error for NamespaceLabelTrigger + TargetNamespaceSource")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // parsePendingOwner tests
 // ---------------------------------------------------------------------------
@@ -701,9 +716,9 @@ func TestBackfillPendingOwner_NonMatchingCR(t *testing.T) {
 	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
 
 	err := rec.backfillPendingOwner(context.Background(), cr, "test-ns")
-	// Should return error to trigger requeue (within TTL)
-	if err == nil {
-		t.Error("expected error for non-matching CR within TTL")
+	// Should return nil (non-matching CRs skip backfill without requeueing)
+	if err != nil {
+		t.Errorf("expected nil for non-matching CR, got %v", err)
 	}
 
 	// Verify nothing changed

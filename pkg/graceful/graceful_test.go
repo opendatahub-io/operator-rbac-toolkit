@@ -3,6 +3,7 @@ package graceful
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,24 +327,62 @@ func TestDo_PermissionRestored_EmitsEvent(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
 
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	// Re-fetch so resource version is populated
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR from fake client: %v", err)
+	}
+	// Re-apply the denied condition on the fetched CR so Do() sees the transition
+	SetPermissionGranted(fetchedCR, false, "was denied before")
+
 	recorder := record.NewFakeRecorder(10)
-
-	// The Do call succeeds (no error), but we cannot do status update
-	// with fake client for our custom type. Verify that the condition
-	// was set on the object before the update call.
 	handler := NewHandler(recorder)
-	_, _ = handler.Do(context.Background(), fakeClient, cr, func() error {
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
 		return nil
 	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0", result.RequeueAfter)
+	}
 
-	pg := findCondition(cr, ConditionTypePermissionGranted)
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
 	if pg == nil {
 		t.Fatal("PermissionGranted condition should be set")
 	}
 	if pg.Status != metav1.ConditionTrue {
 		t.Errorf("PermissionGranted = %s, want True (restored)", pg.Status)
+	}
+
+	// Drain and verify the PermissionRestored event was emitted
+	select {
+	case event := <-recorder.Events:
+		if event == "" {
+			t.Error("received empty event")
+		}
+		if !strings.Contains(event, EventReasonPermissionRestored) {
+			t.Errorf("expected event with reason %s, got %s", EventReasonPermissionRestored, event)
+		}
+	default:
+		t.Error("no PermissionRestored event emitted")
 	}
 }
 
@@ -677,4 +716,179 @@ func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingExists(t *testing.T
 	if deg.Reason != ReasonInsufficientRBAC {
 		t.Errorf("Degraded reason = %s, want %s", deg.Reason, ReasonInsufficientRBAC)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// extractVerbFromMessage tests (MINOR 11)
+// ---------------------------------------------------------------------------
+
+func TestExtractVerbFromMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{"standard get", "User cannot get resource \"secrets\" in namespace \"kube-system\"", "get"},
+		{"standard list", "User cannot list resource \"pods\" in namespace \"default\"", "list"},
+		{"standard create", "User cannot create resource \"configmaps\" in namespace \"test\"", "create"},
+		{"standard update", "User cannot update resource \"deployments\" in namespace \"prod\"", "update"},
+		{"standard delete", "User cannot delete resource \"pods\" in namespace \"test\"", "delete"},
+		{"standard patch", "User cannot patch resource \"services\" in namespace \"default\"", "patch"},
+		{"standard watch", "User cannot watch resource \"events\" in namespace \"kube-system\"", "watch"},
+		{"deletecollection", "User cannot deletecollection resource \"pods\" in namespace \"test\"", "deletecollection"},
+		{"unusual casing", "USER CANNOT GET resource \"secrets\"", "get"},
+		{"no cannot pattern", "access denied for resource secrets", "unknown"},
+		{"empty message", "", "unknown"},
+		{"partial match no space", "cannot getx resource", "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractVerbFromMessage(tt.msg)
+			if got != tt.want {
+				t.Errorf("extractVerbFromMessage(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithDirectReader tests (MINOR 14)
+// ---------------------------------------------------------------------------
+
+func TestDo_ForbiddenError_DirectReader_RoleBindingMissing(t *testing.T) {
+	cr := newTestCR()
+	recorder := record.NewFakeRecorder(10)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	// DirectReader has no RoleBinding, so it should return NotFound -> ProvisioningPending
+	directReader := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	handler := NewHandler(recorder,
+		WithManagedRoleBindingName("test-rolebinding"),
+		WithDirectReader(directReader),
+	)
+
+	forbiddenErr := errors.NewForbidden(
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		"",
+		fmt.Errorf("user cannot list secrets in namespace \"test-ns\""),
+	)
+
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
+		return forbiddenErr
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != DefaultRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
+	}
+
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
+	if pg == nil {
+		t.Fatal("PermissionGranted condition not set")
+	}
+	if pg.Reason != ReasonProvisioningPending {
+		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonProvisioningPending)
+	}
+}
+
+func TestDo_ForbiddenError_DirectReader_ReturnsError(t *testing.T) {
+	cr := newTestCR()
+	recorder := record.NewFakeRecorder(10)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"},
+		&testCR{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCRList"},
+		&testCRList{},
+	)
+
+	storedCR := cr.deepCopy()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(storedCR).
+		WithStatusSubresource(storedCR).
+		Build()
+
+	// DirectReader that returns an error (simulating a Forbidden or other error)
+	directReader := &errorReader{err: fmt.Errorf("simulated Get error")}
+
+	handler := NewHandler(recorder,
+		WithManagedRoleBindingName("test-rolebinding"),
+		WithDirectReader(directReader),
+	)
+
+	forbiddenErr := errors.NewForbidden(
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		"",
+		fmt.Errorf("user cannot list secrets in namespace \"test-ns\""),
+	)
+
+	fetchedCR := &testCR{}
+	fetchedCR.SetGroupVersionKind(schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestCR"})
+	if err := fakeClient.Get(context.Background(), client.ObjectKeyFromObject(cr), fetchedCR); err != nil {
+		t.Fatalf("failed to fetch CR: %v", err)
+	}
+
+	result, err := handler.Do(context.Background(), fakeClient, fetchedCR, func() error {
+		return forbiddenErr
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != DefaultRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, DefaultRequeueAfter)
+	}
+
+	pg := findCondition(fetchedCR, ConditionTypePermissionGranted)
+	if pg == nil {
+		t.Fatal("PermissionGranted condition not set")
+	}
+	if pg.Reason != ReasonPermissionDenied {
+		t.Errorf("PermissionGranted reason = %s, want %s (Get error should assume PermissionDenied)", pg.Reason, ReasonPermissionDenied)
+	}
+}
+
+// errorReader is a client.Reader that always returns an error on Get and List.
+type errorReader struct {
+	err error
+}
+
+func (r *errorReader) Get(_ context.Context, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+	return r.err
+}
+
+func (r *errorReader) List(_ context.Context, _ client.ObjectList, _ ...client.ListOption) error {
+	return r.err
 }

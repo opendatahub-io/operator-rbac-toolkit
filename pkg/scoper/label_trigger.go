@@ -199,6 +199,12 @@ func (r *LabelTriggerReconciler) deleteRoleBinding(ctx context.Context, namespac
 		return nil
 	}
 
+	// Skip deletion if the RoleBinding has OwnerReferences (the reconciler has
+	// adopted its lifecycle via SetOwnerReference, so garbage collection owns it now)
+	if len(rb.OwnerReferences) > 0 {
+		return nil
+	}
+
 	// Delete the RoleBinding
 	if err := r.Client.Delete(ctx, rb); err != nil {
 		if apierrors.IsNotFound(err) {

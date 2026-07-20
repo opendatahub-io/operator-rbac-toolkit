@@ -1,7 +1,6 @@
 package scoper
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -382,96 +381,6 @@ func TestRBACHealthzCheck_FailWhenMultipleClusterRolesMissing(t *testing.T) {
 	err := checker(req)
 	if err == nil {
 		t.Fatal("expected error when multiple ClusterRoles are missing")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// countManagedRoleBindings tests
-// ---------------------------------------------------------------------------
-
-func TestCountManagedRoleBindings(t *testing.T) {
-	scheme := testScheme()
-
-	rb1 := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "managed-rb",
-			Namespace: "ns1",
-			Labels: map[string]string{
-				ManagedLabelKey: ManagedLabelValue,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "role",
-		},
-	}
-
-	rb2 := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "managed-rb",
-			Namespace: "ns2",
-			Labels: map[string]string{
-				ManagedLabelKey: ManagedLabelValue,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "role",
-		},
-	}
-
-	rb3 := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "other-rb",
-			Namespace: "ns3",
-			Labels: map[string]string{
-				ManagedLabelKey: ManagedLabelValue,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "role",
-		},
-	}
-
-	rb4 := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "unmanaged-rb",
-			Namespace: "ns4",
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "role",
-		},
-	}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb1, rb2, rb3, rb4).Build()
-
-	count, err := countManagedRoleBindings(context.Background(), c, "managed-rb")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
-	}
-}
-
-func TestCountManagedRoleBindings_NoRoleBindings(t *testing.T) {
-	scheme := testScheme()
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-
-	count, err := countManagedRoleBindings(context.Background(), c, "managed-rb")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected count 0, got %d", count)
 	}
 }
 

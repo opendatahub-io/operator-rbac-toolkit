@@ -100,7 +100,7 @@ func (h *ProvisioningWebhookHandler) Handle(ctx context.Context, req admission.R
 		}
 	}
 
-	// Step 2: check if RoleBinding already exists (direct API, not cached)
+	// Step 2: check if RoleBinding already exists (may use cached client; AlreadyExists on Create handles races)
 	rbName := types.NamespacedName{Name: target.ManagedRoleBindingName, Namespace: req.Namespace}
 	existing := &rbacv1.RoleBinding{}
 	if err := h.client.Get(ctx, rbName, existing); err == nil {

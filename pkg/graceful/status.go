@@ -66,7 +66,7 @@ func UpdateStatus(ctx context.Context, c client.Client, obj client.Object) error
 }
 
 func setCondition(obj StatusProvider, condition metav1.Condition) {
-	condition.LastTransitionTime = metav1.Now()
+	now := metav1.Now()
 	conditions := obj.GetConditions()
 
 	for i, existing := range conditions {
@@ -74,7 +74,15 @@ func setCondition(obj StatusProvider, condition metav1.Condition) {
 			if existing.Status == condition.Status &&
 				existing.Reason == condition.Reason &&
 				existing.Message == condition.Message {
+				// Completely identical, no-op
 				return
+			}
+			// Only update LastTransitionTime when the Status actually changes.
+			// Reason/Message-only changes preserve the existing transition time.
+			if existing.Status != condition.Status {
+				condition.LastTransitionTime = now
+			} else {
+				condition.LastTransitionTime = existing.LastTransitionTime
 			}
 			conditions[i] = condition
 			obj.SetConditions(conditions)
@@ -82,6 +90,8 @@ func setCondition(obj StatusProvider, condition metav1.Condition) {
 		}
 	}
 
+	// New condition, set the transition time
+	condition.LastTransitionTime = now
 	conditions = append(conditions, condition)
 	obj.SetConditions(conditions)
 }

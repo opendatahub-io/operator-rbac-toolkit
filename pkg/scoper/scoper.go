@@ -147,6 +147,9 @@ func validateTarget(t ScopingTarget) error {
 	if t.WebhookProvisioning && t.TargetNamespaceSource != nil {
 		return fmt.Errorf("WebhookProvisioning cannot be used with TargetNamespaceSource (webhook is same-namespace only)")
 	}
+	if t.NamespaceLabelTrigger != nil && t.TargetNamespaceSource != nil {
+		return fmt.Errorf("NamespaceLabelTrigger cannot be used with TargetNamespaceSource (label trigger is same-namespace only)")
+	}
 	return nil
 }
 

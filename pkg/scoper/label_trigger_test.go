@@ -369,6 +369,80 @@ func TestLabelTriggerReconciler_AlreadyExists(t *testing.T) {
 	}
 }
 
+func TestLabelTriggerReconciler_DoesNotDeleteReconcilerAdoptedRoleBinding(t *testing.T) {
+	// RoleBinding was created by label-trigger but later adopted by the reconciler
+	// (has OwnerReferences). Label removal should NOT delete it.
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-ns",
+			Labels: map[string]string{"team": "backend"}, // no longer matches
+		},
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "scoped-binding",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ManagedLabelKey: ManagedLabelValue,
+			},
+			Annotations: map[string]string{
+				CreatedByAnnotationKey: CreatedByLabelTrigger,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       "my-deploy",
+					UID:        "uid-123",
+				},
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "sa",
+				Namespace: "default",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns, rb).Build()
+
+	target := ScopingTarget{
+		WatchGVK:               testGVK(),
+		TargetSA:               types.NamespacedName{Name: "sa", Namespace: "default"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "scoped-binding",
+		NamespaceLabelTrigger: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"team": "ml"},
+		},
+	}
+
+	rec, err := NewLabelTriggerReconciler(c, target, DenyListConfig{})
+	if err != nil {
+		t.Fatalf("failed to create reconciler: %v", err)
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-ns"}}
+	_, err = rec.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Verify RoleBinding was NOT deleted (has OwnerReferences)
+	existingRB := &rbacv1.RoleBinding{}
+	err = c.Get(context.Background(), types.NamespacedName{Name: "scoped-binding", Namespace: "test-ns"}, existingRB)
+	if err != nil {
+		t.Fatalf("RoleBinding should not be deleted when it has OwnerReferences: %v", err)
+	}
+}
+
 func TestLabelTriggerReconciler_DoesNotDeleteNonLabelTriggerRoleBinding(t *testing.T) {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
