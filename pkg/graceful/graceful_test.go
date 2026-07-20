@@ -517,6 +517,17 @@ func TestDo_ForbiddenError_NoManagedRoleBindingName(t *testing.T) {
 	if pg.Reason != ReasonMissingPermissions {
 		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonMissingPermissions)
 	}
+
+	deg := findCondition(fetchedCR, ConditionTypeDegraded)
+	if deg == nil {
+		t.Fatal("Degraded condition not set after Forbidden error")
+	}
+	if deg.Status != metav1.ConditionTrue {
+		t.Errorf("Degraded status = %s, want True", deg.Status)
+	}
+	if deg.Reason != ReasonInsufficientRBAC {
+		t.Errorf("Degraded reason = %s, want %s", deg.Reason, ReasonInsufficientRBAC)
+	}
 }
 
 func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingMissing(t *testing.T) {
@@ -573,6 +584,17 @@ func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingMissing(t *testing.
 	}
 	if pg.Reason != ReasonProvisioningPending {
 		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonProvisioningPending)
+	}
+
+	deg := findCondition(fetchedCR, ConditionTypeDegraded)
+	if deg == nil {
+		t.Fatal("Degraded condition not set after Forbidden error")
+	}
+	if deg.Status != metav1.ConditionFalse {
+		t.Errorf("Degraded status = %s, want False (provisioning pending should not be degraded)", deg.Status)
+	}
+	if deg.Reason != ReasonProvisioningInProgress {
+		t.Errorf("Degraded reason = %s, want %s", deg.Reason, ReasonProvisioningInProgress)
 	}
 }
 
@@ -643,5 +665,16 @@ func TestDo_ForbiddenError_ManagedRoleBindingName_RoleBindingExists(t *testing.T
 	}
 	if pg.Reason != ReasonPermissionDenied {
 		t.Errorf("PermissionGranted reason = %s, want %s", pg.Reason, ReasonPermissionDenied)
+	}
+
+	deg := findCondition(fetchedCR, ConditionTypeDegraded)
+	if deg == nil {
+		t.Fatal("Degraded condition not set after Forbidden error")
+	}
+	if deg.Status != metav1.ConditionTrue {
+		t.Errorf("Degraded status = %s, want True (permission denied should be degraded)", deg.Status)
+	}
+	if deg.Reason != ReasonInsufficientRBAC {
+		t.Errorf("Degraded reason = %s, want %s", deg.Reason, ReasonInsufficientRBAC)
 	}
 }

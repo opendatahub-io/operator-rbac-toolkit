@@ -3,6 +3,7 @@ package scoper
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -17,10 +18,11 @@ import (
 // LabelTriggerReconciler watches Namespace resources and pre-provisions RoleBindings
 // when namespaces match the configured label selector.
 type LabelTriggerReconciler struct {
-	Client   client.Client
-	Target   ScopingTarget
-	DenyList DenyListConfig
-	Selector labels.Selector
+	Client     client.Client
+	Target     ScopingTarget
+	DenyList   DenyListConfig
+	Selector   labels.Selector
+	nsSelector labels.Selector // NamespaceSelector from the target (nil means all namespaces)
 }
 
 // NewLabelTriggerReconciler creates a reconciler for namespace label-based RoleBinding provisioning.
@@ -34,11 +36,20 @@ func NewLabelTriggerReconciler(c client.Client, target ScopingTarget, denyList D
 		return nil, fmt.Errorf("invalid NamespaceLabelTrigger: %w", err)
 	}
 
+	var nsSelector labels.Selector
+	if target.NamespaceSelector != nil {
+		nsSelector, err = metav1.LabelSelectorAsSelector(target.NamespaceSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid NamespaceSelector: %w", err)
+		}
+	}
+
 	return &LabelTriggerReconciler{
-		Client:   c,
-		Target:   target,
-		DenyList: denyList,
-		Selector: selector,
+		Client:     c,
+		Target:     target,
+		DenyList:   denyList,
+		Selector:   selector,
+		nsSelector: nsSelector,
 	}, nil
 }
 
@@ -71,18 +82,46 @@ func (r *LabelTriggerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	// Check if namespace matches the label selector
+	// Check NamespaceSelector (scoping boundary) before evaluating label trigger
+	if r.nsSelector != nil && !r.nsSelector.Matches(labels.Set(ns.Labels)) {
+		logger.V(1).Info("namespace does not match NamespaceSelector, checking for orphan RoleBindings")
+		if err := r.deleteRoleBinding(ctx, ns.Name); err != nil {
+			logger.Error(err, "failed to delete orphan RoleBinding for excluded namespace")
+			labelTriggerEvaluationsTotal.WithLabelValues("error").Inc()
+			return ctrl.Result{}, err
+		}
+		labelTriggerEvaluationsTotal.WithLabelValues("selector-excluded").Inc()
+		return ctrl.Result{}, nil
+	}
+
+	// Check if namespace matches the label trigger selector
 	matches := r.Selector.Matches(labels.Set(ns.Labels))
 
 	if matches {
+		// Validate ClusterRole before creating RoleBinding
+		if err := ValidateClusterRole(ctx, r.Client, r.Target.ClusterRoleName); err != nil {
+			logger.Info("ClusterRole not found, requeueing",
+				"clusterRole", r.Target.ClusterRoleName, "error", err)
+			clusterRoleMissing.WithLabelValues(r.Target.ClusterRoleName).Set(1)
+			labelTriggerEvaluationsTotal.WithLabelValues("clusterrole-missing").Inc()
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		clusterRoleMissing.WithLabelValues(r.Target.ClusterRoleName).Set(0)
+
 		// Create RoleBinding
-		if err := r.ensureRoleBinding(ctx, ns.Name); err != nil {
+		created, err := r.ensureRoleBinding(ctx, ns.Name)
+		if err != nil {
 			logger.Error(err, "failed to ensure RoleBinding")
 			labelTriggerEvaluationsTotal.WithLabelValues("error").Inc()
 			return ctrl.Result{}, err
 		}
-		labelTriggerEvaluationsTotal.WithLabelValues("created").Inc()
-		logger.Info("RoleBinding ensured for matching namespace")
+		if created {
+			labelTriggerEvaluationsTotal.WithLabelValues("created").Inc()
+			logger.Info("RoleBinding created for matching namespace")
+		} else {
+			labelTriggerEvaluationsTotal.WithLabelValues("already-exists").Inc()
+			logger.V(1).Info("RoleBinding already exists for matching namespace")
+		}
 	} else {
 		// Delete RoleBinding if it exists
 		if err := r.deleteRoleBinding(ctx, ns.Name); err != nil {
@@ -98,7 +137,8 @@ func (r *LabelTriggerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // ensureRoleBinding creates a RoleBinding in the namespace if it doesn't exist.
-func (r *LabelTriggerReconciler) ensureRoleBinding(ctx context.Context, namespace string) error {
+// Returns true if the RoleBinding was actually created, false if it already existed.
+func (r *LabelTriggerReconciler) ensureRoleBinding(ctx context.Context, namespace string) (bool, error) {
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.Target.ManagedRoleBindingName,
@@ -127,12 +167,12 @@ func (r *LabelTriggerReconciler) ensureRoleBinding(ctx context.Context, namespac
 	if err := r.Client.Create(ctx, rb); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Another controller or concurrent reconcile created it, success
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("creating RoleBinding: %w", err)
+		return false, fmt.Errorf("creating RoleBinding: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // deleteRoleBinding removes a label-trigger-created RoleBinding from the namespace.

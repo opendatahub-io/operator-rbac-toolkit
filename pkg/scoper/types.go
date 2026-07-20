@@ -14,6 +14,10 @@ type ScopingTarget struct {
 	NamespaceSelector     *metav1.LabelSelector
 	TargetNamespaceSource *NamespaceSource
 
+	// Resource is the plural resource name (e.g. "networkpolicies"). When empty,
+	// the webhook handler derives it from WatchGVK.Kind via pluralize().
+	Resource string
+
 	// WebhookProvisioning enables MutatingAdmissionWebhook provisioning (same-namespace only)
 	WebhookProvisioning bool
 

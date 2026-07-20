@@ -539,6 +539,19 @@ func TestPluralize(t *testing.T) {
 		{"Class", "classes"},
 		{"Status", "statuses"},
 		{"Ingress", "ingresses"},
+		// y -> ies
+		{"NetworkPolicy", "networkpolicies"},
+		{"Proxy", "proxies"},
+		// ey/ay/oy stay as +s (vowel+y)
+		{"Key", "keys"},
+		{"Gateway", "gateways"},
+		{"Envoy", "envoys"},
+		// x -> xes
+		{"Index", "indexes"},
+		// sh -> shes
+		{"Mesh", "meshes"},
+		// ch -> ches
+		{"Batch", "batches"},
 	}
 
 	for _, tt := range tests {
@@ -548,6 +561,50 @@ func TestPluralize(t *testing.T) {
 				t.Errorf("pluralize(%q) = %q, want %q", tt.kind, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWebhook_ResourceFieldOverride(t *testing.T) {
+	scheme := testScheme()
+
+	cr := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "role"},
+		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
+
+	// Use explicit Resource field to override pluralize
+	handler := NewProvisioningWebhookHandler(
+		c,
+		[]ScopingTarget{{
+			WatchGVK:               schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"},
+			TargetSA:               types.NamespacedName{Name: "sa", Namespace: "ns"},
+			ClusterRoleName:        "role",
+			ManagedRoleBindingName: "binding",
+			Resource:               "networkpolicies",
+			WebhookProvisioning:    true,
+		}},
+		DefaultDenyList("scoper-system"),
+	)
+
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			Operation: admissionv1.Create,
+			Resource:  metav1.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"},
+			Namespace: "user-ns",
+			Name:      "test-policy",
+		},
+	}
+	resp := handler.Handle(context.Background(), req)
+	if !resp.Allowed {
+		t.Fatalf("expected allowed, got denied: %s", resp.Result.Message)
+	}
+
+	// Verify RoleBinding was created (meaning the Resource field matched)
+	rb := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "binding", Namespace: "user-ns"}, rb); err != nil {
+		t.Fatalf("expected RoleBinding to exist when Resource field overrides pluralize, got error: %v", err)
 	}
 }
 

@@ -78,6 +78,11 @@ func (r *CleanupReconciler) listAndCleanup(ctx context.Context, target ScopingTa
 func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.RoleBinding, target ScopingTarget) bool {
 	logger := log.Log.WithName("scoper-cleanup")
 
+	// Handle RoleBindings with pending-owner annotation (webhook-created, never backfilled)
+	if pendingAnnotation, hasPending := rb.Annotations[PendingOwnerAnnotationKey]; hasPending {
+		return r.cleanupPendingOwner(ctx, rb, target, pendingAnnotation)
+	}
+
 	annotation := rb.Annotations[OwnerAnnotationKey]
 	if annotation == "" {
 		return false
@@ -118,6 +123,55 @@ func (r *CleanupReconciler) cleanupRoleBinding(ctx context.Context, rb *rbacv1.R
 		logger.Error(err, "failed to update RoleBinding annotations")
 	}
 	return false
+}
+
+// cleanupPendingOwner handles cleanup for RoleBindings that still have a pending-owner
+// annotation (created by webhook, never backfilled by the reconciler). If the referenced
+// CR no longer exists and the pending-owner TTL (30s) has expired, the RoleBinding is deleted.
+func (r *CleanupReconciler) cleanupPendingOwner(ctx context.Context, rb *rbacv1.RoleBinding, target ScopingTarget, pendingAnnotation string) bool {
+	logger := log.Log.WithName("scoper-cleanup")
+
+	namespace, name, timestamp, err := parsePendingOwner(pendingAnnotation)
+	if err != nil {
+		logger.Error(err, "failed to parse pending-owner annotation, skipping",
+			"roleBinding", rb.Namespace+"/"+rb.Name, "annotation", pendingAnnotation)
+		return false
+	}
+
+	const pendingOwnerTTL = 30 * time.Second
+	if time.Since(timestamp) <= pendingOwnerTTL {
+		// Still within TTL, don't clean up yet
+		return false
+	}
+
+	// Check if the referenced CR still exists
+	cr := &unstructured.Unstructured{}
+	cr.SetGroupVersionKind(target.WatchGVK)
+	err = r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cr)
+	if err == nil {
+		// CR still exists, not an orphan
+		return false
+	}
+	if !apierrors.IsNotFound(err) {
+		// Transient error, assume valid to avoid premature cleanup
+		logger.V(1).Info("transient error checking pending-owner CR, assuming valid",
+			"owner", namespace+"/"+name, "error", err)
+		return false
+	}
+
+	// CR is gone and TTL has expired, delete the RoleBinding
+	logger.Info("deleting orphan RoleBinding with expired pending-owner",
+		"namespace", rb.Namespace, "name", rb.Name,
+		"pendingOwner", namespace+"/"+name)
+	if err := r.Delete(ctx, rb); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to delete orphan pending-owner RoleBinding")
+		return false
+	}
+	roleBindingDeletedTotal.WithLabelValues(
+		fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
+		rb.Namespace,
+	).Inc()
+	return true
 }
 
 func (r *CleanupReconciler) isOwnerValid(ctx context.Context, entry OwnerEntry, target ScopingTarget, rbNamespace string) bool {

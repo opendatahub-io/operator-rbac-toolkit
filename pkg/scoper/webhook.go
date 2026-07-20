@@ -32,10 +32,14 @@ func NewProvisioningWebhookHandler(c client.Client, targets []ScopingTarget, den
 		if !t.WebhookProvisioning {
 			continue
 		}
+		resource := t.Resource
+		if resource == "" {
+			resource = pluralize(t.WatchGVK.Kind)
+		}
 		gvr := schema.GroupVersionResource{
 			Group:    t.WatchGVK.Group,
 			Version:  t.WatchGVK.Version,
-			Resource: pluralize(t.WatchGVK.Kind),
+			Resource: resource,
 		}
 		targetMap[gvr] = t
 		if t.NamespaceSelector != nil {
@@ -168,8 +172,12 @@ func (h *ProvisioningWebhookHandler) Handle(ctx context.Context, req admission.R
 
 func pluralize(kind string) string {
 	k := strings.ToLower(kind)
-	if strings.HasSuffix(k, "s") {
+	switch {
+	case strings.HasSuffix(k, "y") && !strings.HasSuffix(k, "ey") && !strings.HasSuffix(k, "ay") && !strings.HasSuffix(k, "oy"):
+		return k[:len(k)-1] + "ies"
+	case strings.HasSuffix(k, "s") || strings.HasSuffix(k, "x") || strings.HasSuffix(k, "sh") || strings.HasSuffix(k, "ch"):
 		return k + "es"
+	default:
+		return k + "s"
 	}
-	return k + "s"
 }

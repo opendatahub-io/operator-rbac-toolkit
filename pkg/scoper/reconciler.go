@@ -239,6 +239,9 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 			Labels: map[string]string{
 				ManagedLabelKey: ManagedLabelValue,
 			},
+			Annotations: map[string]string{
+				CreatedByAnnotationKey: CreatedByScoper,
+			},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
@@ -264,9 +267,7 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 			Name:      cr.GetName(),
 			UID:       cr.GetUID(),
 		}
-		rb.Annotations = map[string]string{
-			OwnerAnnotationKey: FormatOwnerAnnotation([]OwnerEntry{entry}),
-		}
+		rb.Annotations[OwnerAnnotationKey] = FormatOwnerAnnotation([]OwnerEntry{entry})
 	}
 
 	logger.Info("creating RoleBinding", "namespace", targetNamespace, "name", r.Target.ManagedRoleBindingName)

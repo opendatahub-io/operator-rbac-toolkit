@@ -100,9 +100,8 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 	msg := parseForbiddenMessage(err)
 	backoffKey := backoffKeyFromError(err)
 
-	// Extract resource/verb/reason from error for metrics
-	resource, verb, reason := extractForbiddenDetails(err)
-	permissionDeniedTotal.WithLabelValues(resource, verb, reason).Inc()
+	// Extract resource/verb from error for metrics
+	resource, verb, _ := extractForbiddenDetails(err)
 
 	count := h.backoff.increment(backoffKey)
 	requeue := h.calculateBackoff(count)
@@ -110,13 +109,17 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 	// Determine the appropriate reason based on RoleBinding existence check
 	conditionReason := ReasonMissingPermissions
 	if h.opts.ManagedRoleBindingName != "" {
-		// Check if the expected RoleBinding exists
+		// Check if the expected RoleBinding exists, preferring a direct (uncached) reader
 		rb := &rbacv1.RoleBinding{}
 		rbKey := client.ObjectKey{
 			Name:      h.opts.ManagedRoleBindingName,
 			Namespace: obj.GetNamespace(),
 		}
-		if getErr := c.Get(ctx, rbKey, rb); getErr != nil {
+		reader := client.Reader(c)
+		if h.opts.DirectReader != nil {
+			reader = h.opts.DirectReader
+		}
+		if getErr := reader.Get(ctx, rbKey, rb); getErr != nil {
 			if errors.IsNotFound(getErr) {
 				conditionReason = ReasonProvisioningPending
 			} else {
@@ -128,6 +131,15 @@ func (h *Handler) Do(ctx context.Context, c client.Client, obj client.Object, fn
 			conditionReason = ReasonPermissionDenied
 		}
 	}
+
+	// Emit metric with the condition reason determined by the RoleBinding check.
+	// When ManagedRoleBindingName is not set, conditionReason stays as the generic
+	// "MissingPermissions", so use "unknown" as a more accurate metric label.
+	metricReason := conditionReason
+	if h.opts.ManagedRoleBindingName == "" {
+		metricReason = "unknown"
+	}
+	permissionDeniedTotal.WithLabelValues(resource, verb, metricReason).Inc()
 
 	sp, ok := obj.(StatusProvider)
 	if ok {
@@ -213,7 +225,7 @@ func extractVerbFromMessage(msg string) string {
 	verbs := []string{"get", "list", "create", "update", "delete", "patch", "watch"}
 	lowerMsg := strings.ToLower(msg)
 	for _, v := range verbs {
-		if strings.Contains(lowerMsg, "cannot "+v) || strings.Contains(lowerMsg, v+" ") {
+		if strings.Contains(lowerMsg, "cannot "+v+" ") {
 			return v
 		}
 	}

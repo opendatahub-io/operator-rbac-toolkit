@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,13 +17,16 @@ type TargetHealthStatus struct {
 	Name                 string `json:"name"`
 	ClusterRoleExists    bool   `json:"clusterRoleExists"`
 	ManagedRoleBindings  int    `json:"managedRoleBindings"`
+	OrphanRoleBindings   int    `json:"orphanRoleBindings"`
 	WebhookProvisioning  bool   `json:"webhookProvisioning"`
 }
 
 // RBACHealthResponse is the JSON structure returned by RBACHealthHandler.
 type RBACHealthResponse struct {
-	Targets []TargetHealthStatus `json:"targets"`
-	Healthy bool                 `json:"healthy"`
+	Targets           []TargetHealthStatus `json:"targets"`
+	Healthy           bool                 `json:"healthy"`
+	WebhookRegistered bool                 `json:"webhookRegistered"`
+	LastFullResync    string               `json:"lastFullResync"`
 }
 
 // RBACHealthHandler returns an http.Handler that serves RBAC health status as JSON.
@@ -30,6 +34,16 @@ type RBACHealthResponse struct {
 func RBACHealthHandler(cfg Config, c client.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+
+		// Single cluster-wide list call for all managed RoleBindings (MINOR 8 optimization)
+		rbList := &rbacv1.RoleBindingList{}
+		var listErr error
+		if err := c.List(ctx, rbList, client.MatchingLabels{ManagedLabelKey: ManagedLabelValue}); err != nil {
+			listErr = err
+		}
+
+		now := time.Now()
+		const pendingOwnerTTL = 30 * time.Second
 
 		targets := make([]TargetHealthStatus, 0, len(cfg.Targets))
 		allHealthy := true
@@ -47,21 +61,31 @@ func RBACHealthHandler(cfg Config, c client.Client) http.Handler {
 				allHealthy = false
 			}
 
-			// Count managed RoleBindings for this target
-			count, err := countManagedRoleBindings(ctx, c, target.ManagedRoleBindingName)
-			if err != nil {
-				// Log error but continue with count=0
-				status.ManagedRoleBindings = 0
-			} else {
-				status.ManagedRoleBindings = count
+			// Count managed RoleBindings and orphans from the pre-fetched list
+			if listErr == nil {
+				for _, rb := range rbList.Items {
+					if rb.Name != target.ManagedRoleBindingName {
+						continue
+					}
+					status.ManagedRoleBindings++
+					// Count expired pending-owner RoleBindings as orphans
+					if pendingAnnotation, ok := rb.Annotations[PendingOwnerAnnotationKey]; ok {
+						_, _, timestamp, err := parsePendingOwner(pendingAnnotation)
+						if err == nil && now.Sub(timestamp) > pendingOwnerTTL {
+							status.OrphanRoleBindings++
+						}
+					}
+				}
 			}
 
 			targets = append(targets, status)
 		}
 
 		response := RBACHealthResponse{
-			Targets: targets,
-			Healthy: allHealthy,
+			Targets:           targets,
+			Healthy:           allHealthy,
+			WebhookRegistered: false, // placeholder, webhook registration check can be added later
+			LastFullResync:    "",     // placeholder for future resync tracking
 		}
 
 		w.Header().Set("Content-Type", "application/json")

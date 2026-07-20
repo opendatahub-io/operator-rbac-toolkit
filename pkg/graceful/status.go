@@ -37,12 +37,24 @@ func SetPermissionGrantedWithReason(obj StatusProvider, granted bool, message st
 			Reason:  reason,
 			Message: message,
 		})
-		setCondition(obj, metav1.Condition{
-			Type:    ConditionTypeDegraded,
-			Status:  metav1.ConditionTrue,
-			Reason:  ReasonInsufficientRBAC,
-			Message: message,
-		})
+		// When provisioning is still pending (RoleBinding not yet created),
+		// the operator is not truly degraded: it is waiting for the RBAC
+		// provisioner to act. Only mark Degraded=True for confirmed denials.
+		if customReason == ReasonProvisioningPending {
+			setCondition(obj, metav1.Condition{
+				Type:    ConditionTypeDegraded,
+				Status:  metav1.ConditionFalse,
+				Reason:  ReasonProvisioningInProgress,
+				Message: message,
+			})
+		} else {
+			setCondition(obj, metav1.Condition{
+				Type:    ConditionTypeDegraded,
+				Status:  metav1.ConditionTrue,
+				Reason:  ReasonInsufficientRBAC,
+				Message: message,
+			})
+		}
 	}
 }
 

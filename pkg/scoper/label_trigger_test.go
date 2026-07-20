@@ -84,7 +84,12 @@ func TestLabelTriggerReconciler_MatchingNamespace(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns).Build()
+	cr := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "role"},
+		Rules:      []rbacv1.PolicyRule{{Verbs: []string{"get"}}},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns, cr).Build()
 
 	target := ScopingTarget{
 		WatchGVK:               testGVK(),
@@ -302,6 +307,11 @@ func TestLabelTriggerReconciler_AlreadyExists(t *testing.T) {
 		},
 	}
 
+	cr := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "role"},
+		Rules:      []rbacv1.PolicyRule{{Verbs: []string{"get"}}},
+	}
+
 	// Pre-existing RoleBinding (e.g., created by another reconcile)
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -328,7 +338,7 @@ func TestLabelTriggerReconciler_AlreadyExists(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns, rb).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns, cr, rb).Build()
 
 	target := ScopingTarget{
 		WatchGVK:               testGVK(),
@@ -449,6 +459,138 @@ func TestLabelTriggerReconciler_NamespaceNotFound(t *testing.T) {
 	_, err = rec.Reconcile(context.Background(), req)
 	if err != nil {
 		t.Fatalf("reconcile should handle NotFound gracefully: %v", err)
+	}
+}
+
+func TestLabelTriggerReconciler_NamespaceSelectorExcluded(t *testing.T) {
+	// Namespace matches the label trigger but NOT the NamespaceSelector
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-ns",
+			Labels: map[string]string{"team": "ml", "env": "dev"},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns).Build()
+
+	target := ScopingTarget{
+		WatchGVK:               testGVK(),
+		TargetSA:               types.NamespacedName{Name: "sa", Namespace: "default"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "scoped-binding",
+		NamespaceLabelTrigger: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"team": "ml"},
+		},
+		NamespaceSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"env": "prod"}, // requires prod, ns has dev
+		},
+	}
+
+	rec, err := NewLabelTriggerReconciler(c, target, DenyListConfig{})
+	if err != nil {
+		t.Fatalf("failed to create reconciler: %v", err)
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-ns"}}
+	_, err = rec.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Verify RoleBinding was NOT created (namespace excluded by NamespaceSelector)
+	rb := &rbacv1.RoleBinding{}
+	err = c.Get(context.Background(), types.NamespacedName{Name: "scoped-binding", Namespace: "test-ns"}, rb)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected RoleBinding to not exist when NamespaceSelector excludes, but it does")
+	}
+}
+
+func TestLabelTriggerReconciler_ClusterRoleMissing_Requeues(t *testing.T) {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-ns",
+			Labels: map[string]string{"team": "ml"},
+		},
+	}
+
+	// No ClusterRole created
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns).Build()
+
+	target := ScopingTarget{
+		WatchGVK:               testGVK(),
+		TargetSA:               types.NamespacedName{Name: "sa", Namespace: "default"},
+		ClusterRoleName:        "missing-role",
+		ManagedRoleBindingName: "scoped-binding",
+		NamespaceLabelTrigger: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"team": "ml"},
+		},
+	}
+
+	rec, err := NewLabelTriggerReconciler(c, target, DenyListConfig{})
+	if err != nil {
+		t.Fatalf("failed to create reconciler: %v", err)
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-ns"}}
+	result, err := rec.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("reconcile should not return error for missing ClusterRole: %v", err)
+	}
+
+	// Should requeue after 30s
+	if result.RequeueAfter == 0 {
+		t.Error("expected RequeueAfter > 0 when ClusterRole is missing")
+	}
+
+	// Verify RoleBinding was NOT created
+	rb := &rbacv1.RoleBinding{}
+	err = c.Get(context.Background(), types.NamespacedName{Name: "scoped-binding", Namespace: "test-ns"}, rb)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected RoleBinding to not exist when ClusterRole is missing, but it does")
+	}
+}
+
+func TestLabelTriggerReconciler_MatchingWithClusterRole(t *testing.T) {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-ns",
+			Labels: map[string]string{"team": "ml"},
+		},
+	}
+
+	cr := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "role"},
+		Rules:      []rbacv1.PolicyRule{{Verbs: []string{"get"}}},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(ns, cr).Build()
+
+	target := ScopingTarget{
+		WatchGVK:               testGVK(),
+		TargetSA:               types.NamespacedName{Name: "sa", Namespace: "default"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "scoped-binding",
+		NamespaceLabelTrigger: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"team": "ml"},
+		},
+	}
+
+	rec, err := NewLabelTriggerReconciler(c, target, DenyListConfig{})
+	if err != nil {
+		t.Fatalf("failed to create reconciler: %v", err)
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-ns"}}
+	_, err = rec.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Verify RoleBinding was created
+	rb := &rbacv1.RoleBinding{}
+	err = c.Get(context.Background(), types.NamespacedName{Name: "scoped-binding", Namespace: "test-ns"}, rb)
+	if err != nil {
+		t.Fatalf("RoleBinding not created: %v", err)
 	}
 }
 

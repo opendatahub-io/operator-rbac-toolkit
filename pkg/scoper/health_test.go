@@ -3,9 +3,11 @@ package scoper
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -134,6 +136,9 @@ func TestRBACHealthHandler_ReturnsJSON(t *testing.T) {
 	if target1.ManagedRoleBindings != 2 {
 		t.Errorf("target1 ManagedRoleBindings: got %d, want 2", target1.ManagedRoleBindings)
 	}
+	if target1.OrphanRoleBindings != 0 {
+		t.Errorf("target1 OrphanRoleBindings: got %d, want 0", target1.OrphanRoleBindings)
+	}
 	if !target1.WebhookProvisioning {
 		t.Error("target1 WebhookProvisioning should be true")
 	}
@@ -156,6 +161,11 @@ func TestRBACHealthHandler_ReturnsJSON(t *testing.T) {
 	// Overall health should be false because target2 is missing its ClusterRole
 	if response.Healthy {
 		t.Error("expected Healthy to be false when a ClusterRole is missing")
+	}
+
+	// Check new response-level fields
+	if response.WebhookRegistered {
+		t.Error("expected WebhookRegistered to be false (placeholder)")
 	}
 }
 
@@ -462,5 +472,109 @@ func TestCountManagedRoleBindings_NoRoleBindings(t *testing.T) {
 
 	if count != 0 {
 		t.Errorf("expected count 0, got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OrphanRoleBindings and new fields tests
+// ---------------------------------------------------------------------------
+
+func TestRBACHealthHandler_OrphanRoleBindings(t *testing.T) {
+	scheme := testScheme()
+
+	cr1 := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "role-1"},
+		Rules:      []rbacv1.PolicyRule{{Verbs: []string{"get"}}},
+	}
+
+	// Normal managed RoleBinding (no pending-owner)
+	rb1 := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "ns1",
+			Labels: map[string]string{
+				ManagedLabelKey: ManagedLabelValue,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role-1",
+		},
+	}
+
+	// Orphan RoleBinding with expired pending-owner (timestamp in the past)
+	expiredTimestamp := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	rb2 := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "ns2",
+			Labels: map[string]string{
+				ManagedLabelKey: ManagedLabelValue,
+			},
+			Annotations: map[string]string{
+				PendingOwnerAnnotationKey: fmt.Sprintf("ns2/deleted-cr/test.io/v1/Thing/%s", expiredTimestamp),
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role-1",
+		},
+	}
+
+	// RoleBinding with non-expired pending-owner (should not count as orphan)
+	freshTimestamp := time.Now().UTC().Format(time.RFC3339)
+	rb3 := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "ns3",
+			Labels: map[string]string{
+				ManagedLabelKey: ManagedLabelValue,
+			},
+			Annotations: map[string]string{
+				PendingOwnerAnnotationKey: fmt.Sprintf("ns3/new-cr/test.io/v1/Thing/%s", freshTimestamp),
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role-1",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr1, rb1, rb2, rb3).Build()
+
+	cfg := Config{
+		Targets: []ScopingTarget{
+			{
+				WatchGVK:              schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Thing"},
+				TargetSA:              types.NamespacedName{Name: "sa1", Namespace: "ns1"},
+				ClusterRoleName:       "role-1",
+				ManagedRoleBindingName: "managed-rb",
+			},
+		},
+	}
+
+	handler := RBACHealthHandler(cfg, c)
+	req := httptest.NewRequest(http.MethodGet, "/debug/rbac-health", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	var response RBACHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(response.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(response.Targets))
+	}
+
+	target := response.Targets[0]
+	if target.ManagedRoleBindings != 3 {
+		t.Errorf("ManagedRoleBindings: got %d, want 3", target.ManagedRoleBindings)
+	}
+	if target.OrphanRoleBindings != 1 {
+		t.Errorf("OrphanRoleBindings: got %d, want 1 (only expired pending-owner)", target.OrphanRoleBindings)
 	}
 }

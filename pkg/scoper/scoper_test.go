@@ -721,6 +721,136 @@ func TestBackfillPendingOwner_NonMatchingCR(t *testing.T) {
 	}
 }
 
+func TestBackfillPendingOwner_PastTTL_NoRequeue(t *testing.T) {
+	scheme := testScheme()
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"},
+		&unstructured.Unstructured{},
+	)
+
+	cr := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "test.io/v1",
+			"kind":       "MyResource",
+			"metadata": map[string]interface{}{
+				"name":      "my-cr",
+				"namespace": "test-ns",
+				"uid":       "cr-uid-123",
+			},
+		},
+	}
+
+	// RoleBinding has pending-owner pointing to a different CR, with timestamp past TTL
+	pastTimestamp := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				PendingOwnerAnnotationKey: fmt.Sprintf("test-ns/other-cr/test.io/v1/MyResource/%s", pastTimestamp),
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "test-role",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb).Build()
+	target := ScopingTarget{
+		WatchGVK:              schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"},
+		TargetSA:              types.NamespacedName{Name: "sa", Namespace: "operator-ns"},
+		ClusterRoleName:       "test-role",
+		ManagedRoleBindingName: "managed-rb",
+	}
+	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
+
+	err := rec.backfillPendingOwner(context.Background(), cr, "test-ns")
+	// Should NOT return error (stops requeueing since TTL expired)
+	if err != nil {
+		t.Errorf("expected no error for pending-owner past TTL, got %v", err)
+	}
+
+	// Verify nothing changed (no OwnerReference set, annotation still present)
+	updated := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "managed-rb", Namespace: "test-ns"}, updated); err != nil {
+		t.Fatalf("failed to get RoleBinding: %v", err)
+	}
+	if len(updated.OwnerReferences) > 0 {
+		t.Error("expected no OwnerReference for non-matching CR past TTL")
+	}
+	if _, exists := updated.Annotations[PendingOwnerAnnotationKey]; !exists {
+		t.Error("expected pending-owner annotation to remain")
+	}
+}
+
+func TestBackfillPendingOwner_CRWithEmptyUID(t *testing.T) {
+	scheme := testScheme()
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"},
+		&unstructured.Unstructured{},
+	)
+
+	// CR with empty UID (e.g., just created, not yet persisted)
+	cr := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "test.io/v1",
+			"kind":       "MyResource",
+			"metadata": map[string]interface{}{
+				"name":      "my-cr",
+				"namespace": "test-ns",
+				"uid":       "", // empty UID
+			},
+		},
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				PendingOwnerAnnotationKey: fmt.Sprintf("test-ns/my-cr/test.io/v1/MyResource/%s",
+					time.Now().UTC().Format(time.RFC3339)),
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "test-role",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb).Build()
+	target := ScopingTarget{
+		WatchGVK:              schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"},
+		TargetSA:              types.NamespacedName{Name: "sa", Namespace: "operator-ns"},
+		ClusterRoleName:       "test-role",
+		ManagedRoleBindingName: "managed-rb",
+	}
+	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
+
+	err := rec.backfillPendingOwner(context.Background(), cr, "test-ns")
+	// Should return nil (skips backfill when UID is empty)
+	if err != nil {
+		t.Errorf("expected no error for CR with empty UID, got %v", err)
+	}
+
+	// Verify no OwnerReference was set
+	updated := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "managed-rb", Namespace: "test-ns"}, updated); err != nil {
+		t.Fatalf("failed to get RoleBinding: %v", err)
+	}
+	if len(updated.OwnerReferences) > 0 {
+		t.Error("expected no OwnerReference when CR has empty UID")
+	}
+
+	// Pending-owner annotation should still be present (not removed since UID is empty)
+	if _, exists := updated.Annotations[PendingOwnerAnnotationKey]; !exists {
+		t.Error("expected pending-owner annotation to remain when CR has empty UID")
+	}
+}
+
 func TestBackfillPendingOwner_NoPendingOwner(t *testing.T) {
 	scheme := testScheme()
 	scheme.AddKnownTypeWithName(

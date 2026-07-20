@@ -4,6 +4,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -15,6 +16,7 @@ const (
 	ReasonInsufficientRBAC        = "InsufficientRBAC"
 	ReasonFullyOperational        = "FullyOperational"
 	ReasonProvisioningPending     = "ProvisioningPending"
+	ReasonProvisioningInProgress  = "ProvisioningInProgress"
 	ReasonPermissionDenied        = "PermissionDenied"
 
 	EventReasonPermissionDenied   = "PermissionDenied"
@@ -57,6 +59,7 @@ type Options struct {
 	MaxRequeue             time.Duration
 	BackoffFactor          float64
 	ManagedRoleBindingName string
+	DirectReader           client.Reader
 }
 
 func defaultOptions() Options {
@@ -93,6 +96,12 @@ func WithBackoffFactor(f float64) Option {
 func WithManagedRoleBindingName(name string) Option {
 	return func(o *Options) {
 		o.ManagedRoleBindingName = name
+	}
+}
+
+func WithDirectReader(reader client.Reader) Option {
+	return func(o *Options) {
+		o.DirectReader = reader
 	}
 }
 
