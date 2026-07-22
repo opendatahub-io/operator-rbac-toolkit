@@ -52,7 +52,7 @@ spec:
             rule.resources.exists(r, r in [
               "users", "groups", "serviceaccounts",
               "userextras", "uids", "*"
-            ]))
+            ] || r.startsWith("userextras/"))))
         )
       message: >-
         Granting the "impersonate" verb is not allowed. Impersonation is a

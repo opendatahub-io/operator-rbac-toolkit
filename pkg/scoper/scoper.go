@@ -105,11 +105,11 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 	if cfg.CleanupInterval.Duration > 0 {
 		cleanupInterval = cfg.CleanupInterval.Duration
 	}
-	crossNsTargets := filterCrossNamespaceTargets(cfg.Targets)
-	if len(crossNsTargets) > 0 {
+	cleanupTargets := filterCleanupTargets(cfg.Targets)
+	if len(cleanupTargets) > 0 {
 		cleanup := &CleanupReconciler{
 			Client:   mgr.GetClient(),
-			Targets:  crossNsTargets,
+			Targets:  cleanupTargets,
 			DenyList: denyList,
 			Interval: cleanupInterval,
 		}
@@ -153,10 +153,10 @@ func validateTarget(t ScopingTarget) error {
 	return nil
 }
 
-func filterCrossNamespaceTargets(targets []ScopingTarget) []ScopingTarget {
+func filterCleanupTargets(targets []ScopingTarget) []ScopingTarget {
 	var result []ScopingTarget
 	for _, t := range targets {
-		if t.TargetNamespaceSource != nil {
+		if t.TargetNamespaceSource != nil || t.WebhookProvisioning {
 			result = append(result, t)
 		}
 	}

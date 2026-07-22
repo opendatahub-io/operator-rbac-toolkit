@@ -532,6 +532,45 @@ func TestValidateTarget_RejectsLabelTriggerWithTargetNamespaceSource(t *testing.
 	}
 }
 
+func TestValidateTarget_RejectsUnsafeFieldPath(t *testing.T) {
+	unsafePaths := []string{
+		".metadata.annotations.target-namespace",
+		".metadata.labels.ns",
+		".status.namespace",
+		"metadata.annotations.ns",
+	}
+	for _, fp := range unsafePaths {
+		target := ScopingTarget{
+			WatchGVK:              schema.GroupVersionKind{Kind: "Foo"},
+			TargetSA:              types.NamespacedName{Name: "sa", Namespace: "ns"},
+			ClusterRoleName:       "role",
+			ManagedRoleBindingName: "binding",
+			TargetNamespaceSource: &NamespaceSource{FieldPath: fp},
+		}
+		err := validateTarget(target)
+		if err == nil {
+			t.Fatalf("expected error for unsafe FieldPath %q", fp)
+		}
+	}
+}
+
+func TestValidateTarget_AcceptsSafeFieldPath(t *testing.T) {
+	safePaths := []string{".spec.namespace", ".spec.target.namespace", "spec.ns"}
+	for _, fp := range safePaths {
+		target := ScopingTarget{
+			WatchGVK:              schema.GroupVersionKind{Kind: "Foo"},
+			TargetSA:              types.NamespacedName{Name: "sa", Namespace: "ns"},
+			ClusterRoleName:       "role",
+			ManagedRoleBindingName: "binding",
+			TargetNamespaceSource: &NamespaceSource{FieldPath: fp},
+		}
+		err := validateTarget(target)
+		if err != nil {
+			t.Fatalf("unexpected error for safe FieldPath %q: %v", fp, err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // parsePendingOwner tests
 // ---------------------------------------------------------------------------

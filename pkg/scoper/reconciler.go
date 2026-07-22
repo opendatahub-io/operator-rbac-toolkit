@@ -200,26 +200,26 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 	}
 
 	if roleRefDrifted {
-		// RoleRef is immutable, must delete and recreate
+		// RoleRef is immutable, must delete and recreate.
+		// We intentionally do not copy annotations from the stale snapshot
+		// to avoid losing concurrent updates. Each CR's reconciler will
+		// re-add its owner entry on the next reconciliation cycle.
 		logger.Info("RoleRef drift detected, deleting RoleBinding for recreation",
 			"namespace", targetNamespace, "name", existing.Name,
 			"expected", expectedRoleRef, "actual", existing.RoleRef)
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("deleting drifted RoleBinding: %w", err)
 		}
-		// Recreate with correct spec (preserving annotations/owner references)
-		recreatedLabels := existing.Labels
-		if recreatedLabels == nil {
-			recreatedLabels = make(map[string]string)
-		}
-		recreatedLabels[ManagedLabelKey] = ManagedLabelValue
 		recreated := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            existing.Name,
-				Namespace:       existing.Namespace,
-				Labels:          recreatedLabels,
-				Annotations:     existing.Annotations,
-				OwnerReferences: existing.OwnerReferences,
+				Name:      existing.Name,
+				Namespace: existing.Namespace,
+				Labels: map[string]string{
+					ManagedLabelKey: ManagedLabelValue,
+				},
+				Annotations: map[string]string{
+					CreatedByAnnotationKey: CreatedByScoper,
+				},
 			},
 			RoleRef:  expectedRoleRef,
 			Subjects: expectedSubjects,

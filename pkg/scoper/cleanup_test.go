@@ -323,6 +323,142 @@ func TestCleanupRoleBinding_WithPendingOwner(t *testing.T) {
 	}
 }
 
+func TestCleanupRoleBinding_OwnerDeleted_IsOrphan(t *testing.T) {
+	scheme := testScheme()
+	gvk := schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"}
+	scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "target-ns",
+			Labels:    map[string]string{ManagedLabelKey: ManagedLabelValue},
+			Annotations: map[string]string{
+				OwnerAnnotationKey: "owner-ns/deleted-cr/uid-gone",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb).Build()
+	target := ScopingTarget{
+		WatchGVK:              gvk,
+		TargetSA:              types.NamespacedName{Name: "sa", Namespace: "ns"},
+		ClusterRoleName:       "role",
+		ManagedRoleBindingName: "managed-rb",
+	}
+
+	reconciler := &CleanupReconciler{Client: c, Targets: []ScopingTarget{target}}
+	isOrphan := reconciler.cleanupRoleBinding(context.Background(), rb, target)
+	if !isOrphan {
+		t.Error("expected orphan when owner CR is deleted")
+	}
+}
+
+func TestCleanupRoleBinding_OwnerReplacedWithDifferentUID_IsOrphan(t *testing.T) {
+	scheme := testScheme()
+	gvk := schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"}
+	scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+
+	cr := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "test.io/v1",
+			"kind":       "MyResource",
+			"metadata": map[string]interface{}{
+				"name":      "my-cr",
+				"namespace": "owner-ns",
+				"uid":       "uid-new-456",
+			},
+		},
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "target-ns",
+			Labels:    map[string]string{ManagedLabelKey: ManagedLabelValue},
+			Annotations: map[string]string{
+				OwnerAnnotationKey: "owner-ns/my-cr/uid-old-123",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb, cr).Build()
+	target := ScopingTarget{
+		WatchGVK:              gvk,
+		TargetSA:              types.NamespacedName{Name: "sa", Namespace: "ns"},
+		ClusterRoleName:       "role",
+		ManagedRoleBindingName: "managed-rb",
+	}
+
+	reconciler := &CleanupReconciler{Client: c, Targets: []ScopingTarget{target}}
+	isOrphan := reconciler.cleanupRoleBinding(context.Background(), rb, target)
+	if !isOrphan {
+		t.Error("expected orphan when owner CR has different UID (replaced)")
+	}
+}
+
+func TestCleanupRoleBinding_CrossNamespace_WrongResolvedNamespace(t *testing.T) {
+	scheme := testScheme()
+	gvk := schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"}
+	scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+
+	cr := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "test.io/v1",
+			"kind":       "MyResource",
+			"metadata": map[string]interface{}{
+				"name":      "my-cr",
+				"namespace": "owner-ns",
+				"uid":       "uid-123",
+			},
+			"spec": map[string]interface{}{
+				"targetNamespace": "new-target-ns",
+			},
+		},
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "managed-rb",
+			Namespace: "old-target-ns",
+			Labels:    map[string]string{ManagedLabelKey: ManagedLabelValue},
+			Annotations: map[string]string{
+				OwnerAnnotationKey: "owner-ns/my-cr/uid-123",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     "role",
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rb, cr).Build()
+	target := ScopingTarget{
+		WatchGVK:              gvk,
+		TargetSA:              types.NamespacedName{Name: "sa", Namespace: "ns"},
+		ClusterRoleName:       "role",
+		ManagedRoleBindingName: "managed-rb",
+		TargetNamespaceSource: &NamespaceSource{FieldPath: ".spec.targetNamespace"},
+	}
+
+	reconciler := &CleanupReconciler{Client: c, Targets: []ScopingTarget{target}}
+	isOrphan := reconciler.cleanupRoleBinding(context.Background(), rb, target)
+	if !isOrphan {
+		t.Error("expected orphan when CR's resolved namespace doesn't match RoleBinding namespace")
+	}
+}
+
 func TestCleanupRoleBinding_EmptyAnnotation_NotOrphan(t *testing.T) {
 	scheme := testScheme()
 	gvk := schema.GroupVersionKind{Group: "test.io", Version: "v1", Kind: "MyResource"}

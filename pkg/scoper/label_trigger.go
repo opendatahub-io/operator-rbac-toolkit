@@ -3,6 +3,7 @@ package scoper
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -166,13 +167,46 @@ func (r *LabelTriggerReconciler) ensureRoleBinding(ctx context.Context, namespac
 
 	if err := r.Client.Create(ctx, rb); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			// Another controller or concurrent reconcile created it, success
-			return false, nil
+			return false, r.ensureDrift(ctx, rb)
 		}
 		return false, fmt.Errorf("creating RoleBinding: %w", err)
 	}
 
 	return true, nil
+}
+
+// ensureDrift checks and corrects RoleRef and Subjects drift on an existing RoleBinding.
+func (r *LabelTriggerReconciler) ensureDrift(ctx context.Context, expected *rbacv1.RoleBinding) error {
+	logger := log.FromContext(ctx)
+	existing := &rbacv1.RoleBinding{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(expected), existing); err != nil {
+		return fmt.Errorf("getting RoleBinding for drift check: %w", err)
+	}
+
+	if len(existing.OwnerReferences) > 0 {
+		return nil
+	}
+
+	if existing.RoleRef != expected.RoleRef {
+		logger.Info("RoleRef drift detected on label-trigger RoleBinding, deleting for recreation",
+			"namespace", existing.Namespace, "name", existing.Name)
+		if err := r.Client.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting drifted RoleBinding: %w", err)
+		}
+		if err := r.Client.Create(ctx, expected); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("recreating RoleBinding: %w", err)
+		}
+		return nil
+	}
+
+	if !reflect.DeepEqual(existing.Subjects, expected.Subjects) {
+		logger.Info("Subjects drift detected on label-trigger RoleBinding, correcting",
+			"namespace", existing.Namespace, "name", existing.Name)
+		existing.Subjects = expected.Subjects
+		return r.Client.Update(ctx, existing)
+	}
+
+	return nil
 }
 
 // deleteRoleBinding removes a label-trigger-created RoleBinding from the namespace.

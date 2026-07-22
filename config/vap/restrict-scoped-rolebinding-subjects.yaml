@@ -32,8 +32,10 @@ spec:
   matchConditions:
     - name: has-managed-annotation
       expression: >-
-        has(object.metadata.annotations) &&
-        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
+        (has(object.metadata.annotations) &&
+         'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations) ||
+        (has(oldObject.metadata.annotations) &&
+         'operator-rbac-toolkit.io/scoped-access-owners' in oldObject.metadata.annotations)
   validations:
     # Every subject in the RoleBinding must be a ServiceAccount, and each must
     # match the expected namespace and name. This prevents binding to Users,
