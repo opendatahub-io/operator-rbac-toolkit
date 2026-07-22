@@ -33,10 +33,10 @@ spec:
   matchConditions:
     - name: is-managed-rolebinding
       expression: >-
-        (has(object.metadata) && has(object.metadata.annotations) &&
-         'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations) ||
-        (has(oldObject.metadata) && has(oldObject.metadata.annotations) &&
-         'operator-rbac-toolkit.io/scoped-access-owners' in oldObject.metadata.annotations)
+        (has(object.metadata.labels) &&
+         object.metadata.labels['operator-rbac-toolkit.io/managed'] == 'true') ||
+        (has(oldObject.metadata.labels) &&
+         oldObject.metadata.labels['operator-rbac-toolkit.io/managed'] == 'true')
   validations:
     # The requesting user must be the scoping controller's ServiceAccount.
     # Any other principal attempting to modify or remove a managed RoleBinding

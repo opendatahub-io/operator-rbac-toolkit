@@ -36,10 +36,10 @@ spec:
   # RoleBindings without the annotation are not managed by the scoping controller
   # and are not subject to this restriction.
   matchConditions:
-    - name: has-managed-annotation
+    - name: is-managed
       expression: >-
-        has(object.metadata.annotations) &&
-        'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations
+        has(object.metadata.labels) &&
+        object.metadata.labels['operator-rbac-toolkit.io/managed'] == 'true'
   validations:
     # The requesting user must be the scoping controller's ServiceAccount.
     # Kubernetes ServiceAccount usernames follow the format:

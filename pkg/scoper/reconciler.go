@@ -201,14 +201,28 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 
 	if roleRefDrifted {
 		// RoleRef is immutable, must delete and recreate.
-		// We intentionally do not copy annotations from the stale snapshot
-		// to avoid losing concurrent updates. Each CR's reconciler will
-		// re-add its owner entry on the next reconciliation cycle.
+		// Re-fetch to get the latest annotations before delete to minimize
+		// the window for losing concurrent owner annotation updates.
+		fresh := &rbacv1.RoleBinding{}
+		if fetchErr := r.Get(ctx, client.ObjectKeyFromObject(existing), fresh); fetchErr != nil {
+			if !apierrors.IsNotFound(fetchErr) {
+				return fmt.Errorf("re-fetching RoleBinding for drift correction: %w", fetchErr)
+			}
+		} else {
+			existing = fresh
+		}
+
 		logger.Info("RoleRef drift detected, deleting RoleBinding for recreation",
 			"namespace", targetNamespace, "name", existing.Name,
 			"expected", expectedRoleRef, "actual", existing.RoleRef)
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("deleting drifted RoleBinding: %w", err)
+		}
+		recreatedAnnotations := map[string]string{
+			CreatedByAnnotationKey: CreatedByScoper,
+		}
+		if ownerAnno, ok := existing.Annotations[OwnerAnnotationKey]; ok {
+			recreatedAnnotations[OwnerAnnotationKey] = ownerAnno
 		}
 		recreated := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
@@ -217,14 +231,19 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 				Labels: map[string]string{
 					ManagedLabelKey: ManagedLabelValue,
 				},
-				Annotations: map[string]string{
-					CreatedByAnnotationKey: CreatedByScoper,
-				},
+				Annotations:     recreatedAnnotations,
+				OwnerReferences: existing.OwnerReferences,
 			},
 			RoleRef:  expectedRoleRef,
 			Subjects: expectedSubjects,
 		}
-		return r.Create(ctx, recreated)
+		if err := r.Create(ctx, recreated); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 
 	// Only Subjects drifted, can update in place

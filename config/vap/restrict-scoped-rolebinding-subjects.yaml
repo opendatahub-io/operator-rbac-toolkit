@@ -27,16 +27,17 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["rolebindings"]
-  # Only evaluate RoleBindings that carry the managed annotation.
-  # Non-managed RoleBindings are not subject to this restriction.
+  # Only evaluate RoleBindings managed by the toolkit (label present on all
+  # managed RoleBindings regardless of creation path: reconciler, webhook,
+  # or label trigger).
   matchConditions:
-    - name: has-managed-annotation
+    - name: is-managed
       expression: >-
-        (has(object.metadata.annotations) &&
-         'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations) ||
+        (has(object.metadata.labels) &&
+         object.metadata.labels['operator-rbac-toolkit.io/managed'] == 'true') ||
         (oldObject != null &&
-         has(oldObject.metadata.annotations) &&
-         'operator-rbac-toolkit.io/scoped-access-owners' in oldObject.metadata.annotations)
+         has(oldObject.metadata.labels) &&
+         oldObject.metadata.labels['operator-rbac-toolkit.io/managed'] == 'true')
   validations:
     # Every subject in the RoleBinding must be a ServiceAccount, and each must
     # match the expected namespace and name. This prevents binding to Users,
