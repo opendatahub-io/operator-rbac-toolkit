@@ -357,6 +357,12 @@ func TestCleanupRoleBinding_OwnerDeleted_IsOrphan(t *testing.T) {
 	if !isOrphan {
 		t.Error("expected orphan when owner CR is deleted")
 	}
+
+	existing := &rbacv1.RoleBinding{}
+	err := c.Get(context.Background(), types.NamespacedName{Name: "managed-rb", Namespace: "target-ns"}, existing)
+	if !apierrors.IsNotFound(err) {
+		t.Error("expected RoleBinding to be deleted")
+	}
 }
 
 func TestCleanupRoleBinding_OwnerReplacedWithDifferentUID_IsOrphan(t *testing.T) {
@@ -404,6 +410,12 @@ func TestCleanupRoleBinding_OwnerReplacedWithDifferentUID_IsOrphan(t *testing.T)
 	isOrphan := reconciler.cleanupRoleBinding(context.Background(), rb, target)
 	if !isOrphan {
 		t.Error("expected orphan when owner CR has different UID (replaced)")
+	}
+
+	existing := &rbacv1.RoleBinding{}
+	err := c.Get(context.Background(), types.NamespacedName{Name: "managed-rb", Namespace: "target-ns"}, existing)
+	if !apierrors.IsNotFound(err) {
+		t.Error("expected RoleBinding to be deleted")
 	}
 }
 
@@ -456,6 +468,12 @@ func TestCleanupRoleBinding_CrossNamespace_WrongResolvedNamespace(t *testing.T) 
 	isOrphan := reconciler.cleanupRoleBinding(context.Background(), rb, target)
 	if !isOrphan {
 		t.Error("expected orphan when CR's resolved namespace doesn't match RoleBinding namespace")
+	}
+
+	existing := &rbacv1.RoleBinding{}
+	err := c.Get(context.Background(), types.NamespacedName{Name: "managed-rb", Namespace: "old-target-ns"}, existing)
+	if !apierrors.IsNotFound(err) {
+		t.Error("expected RoleBinding to be deleted")
 	}
 }
 

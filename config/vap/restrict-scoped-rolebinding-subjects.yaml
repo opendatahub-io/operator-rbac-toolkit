@@ -34,7 +34,8 @@ spec:
       expression: >-
         (has(object.metadata.annotations) &&
          'operator-rbac-toolkit.io/scoped-access-owners' in object.metadata.annotations) ||
-        (has(oldObject.metadata.annotations) &&
+        (oldObject != null &&
+         has(oldObject.metadata.annotations) &&
          'operator-rbac-toolkit.io/scoped-access-owners' in oldObject.metadata.annotations)
   validations:
     # Every subject in the RoleBinding must be a ServiceAccount, and each must
