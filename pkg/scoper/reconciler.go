@@ -249,8 +249,14 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 	// Only Subjects drifted, can update in place
 	logger.Info("Subjects drift detected, updating RoleBinding",
 		"namespace", targetNamespace, "name", existing.Name)
-	existing.Subjects = expectedSubjects
-	return r.Update(ctx, existing)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		fresh := &rbacv1.RoleBinding{}
+		if err := r.Get(ctx, types.NamespacedName{Name: existing.Name, Namespace: existing.Namespace}, fresh); err != nil {
+			return err
+		}
+		fresh.Subjects = expectedSubjects
+		return r.Update(ctx, fresh)
+	})
 }
 
 func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string) error {

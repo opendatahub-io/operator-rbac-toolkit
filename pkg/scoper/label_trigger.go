@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/client-go/util/retry"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -202,8 +203,14 @@ func (r *LabelTriggerReconciler) ensureDrift(ctx context.Context, expected *rbac
 	if !reflect.DeepEqual(existing.Subjects, expected.Subjects) {
 		logger.Info("Subjects drift detected on label-trigger RoleBinding, correcting",
 			"namespace", existing.Namespace, "name", existing.Name)
-		existing.Subjects = expected.Subjects
-		return r.Client.Update(ctx, existing)
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			fresh := &rbacv1.RoleBinding{}
+			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(existing), fresh); err != nil {
+				return err
+			}
+			fresh.Subjects = expected.Subjects
+			return r.Client.Update(ctx, fresh)
+		})
 	}
 
 	return nil
