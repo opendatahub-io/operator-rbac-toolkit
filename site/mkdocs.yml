@@ -106,6 +106,7 @@ nav:
     - examples/index.md
     - RHOAI Dashboard: examples/rhoai-dashboard.md
   - Design:
+    - v1 vs v2: design/v1-vs-v2.md
     - Tradeoffs: design/tradeoffs.md
   - Performance:
     - Results: performance/results.md
