@@ -55,7 +55,7 @@ The core architectural shift: in v1 the operator was both consumer and producer 
 
 ## Why escalate was removed
 
-v1 offered an escalate mode where the operator could create Roles at runtime with arbitrary rules. This required the `escalate` verb on the operator SA, which allows a compromised SA to grant itself any permission in the cluster. The CNCF, Red Hat, NSA/CISA, and Kubernetes upstream documentation all warn against this pattern.
+v1 offered an escalate mode where the operator could create Roles at runtime with arbitrary rules. This required the `escalate` verb on the operator SA, which allows a compromised SA to grant itself any permission in the cluster. The CNCF, NSA/CISA, and Kubernetes upstream documentation all warn against this pattern.
 
 v2 uses bind mode exclusively. Static ClusterRoles are deployed via manifests (Helm, Kustomize, OLM). The scoping controller creates RoleBindings referencing those static ClusterRoles. Kubernetes RBAC escalation prevention ensures the creating principal must already hold all permissions in any ClusterRole it binds.
 

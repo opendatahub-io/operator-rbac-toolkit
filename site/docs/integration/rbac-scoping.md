@@ -56,24 +56,24 @@ func main() {
         Targets: []scoper.ScopingTarget{
             {
                 WatchGVK: schema.GroupVersionKind{
-                    Group:   "dashboard.opendatahub.io",
+                    Group:   "apps.example.com",
                     Version: "v1alpha1",
-                    Kind:    "OdhDashboardConfig",
+                    Kind:    "WidgetConfig",
                 },
                 TargetSA: types.NamespacedName{
-                    Name:      "odh-dashboard",
-                    Namespace: "redhat-ods-applications",
+                    Name:      "widget-operator",
+                    Namespace: "widget-operator-system",
                 },
-                ClusterRoleName:       "odh-dashboard-scoped",
-                ManagedRoleBindingName: "odh-dashboard-scoped-binding",
+                ClusterRoleName:       "widget-operator-scoped",
+                ManagedRoleBindingName: "widget-operator-scoped-binding",
                 NamespaceSelector: &metav1.LabelSelector{
                     MatchLabels: map[string]string{
-                        "opendatahub.io/dashboard": "true",
+                        "apps.example.com/managed": "true",
                     },
                 },
             },
         },
-        ControllerNamespace: "redhat-ods-operator",
+        ControllerNamespace: "platform-operator-system",
     }
 
     if err := scoper.Setup(mgr, scoperCfg); err != nil {
@@ -106,17 +106,17 @@ data:
     controllerNamespace: rbac-scoper-system
     targets:
       - watchGVK:
-          group: dashboard.opendatahub.io
+          group: apps.example.com
           version: v1alpha1
-          kind: OdhDashboardConfig
+          kind: WidgetConfig
         targetSA:
-          name: odh-dashboard
-          namespace: redhat-ods-applications
-        clusterRoleName: odh-dashboard-scoped
-        managedRoleBindingName: odh-dashboard-scoped-binding
+          name: widget-operator
+          namespace: widget-operator-system
+        clusterRoleName: widget-operator-scoped
+        managedRoleBindingName: widget-operator-scoped-binding
         namespaceSelector:
           matchLabels:
-            opendatahub.io/dashboard: "true"
+            apps.example.com/managed: "true"
 ```
 
 The standalone binary reads this file via `--config` flag (default: `/etc/rbac-scoper/config.yaml`). Mount the ConfigMap key `config.yaml` to this path in the Deployment's volume configuration.
@@ -130,8 +130,8 @@ metadata:
   name: rbac-scoper-controller
 rules:
   # Watch target CRs
-  - apiGroups: ["dashboard.opendatahub.io"]
-    resources: ["odhdashboardconfigs"]
+  - apiGroups: ["apps.example.com"]
+    resources: ["widgetconfigs"]
     verbs: ["get", "list", "watch"]
   # Manage RoleBindings
   - apiGroups: ["rbac.authorization.k8s.io"]
@@ -141,12 +141,12 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     verbs: ["bind"]
-    resourceNames: ["odh-dashboard-scoped"]
+    resourceNames: ["widget-operator-scoped"]
   # Validate ClusterRole at startup (no aggregationRule)
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     verbs: ["get"]
-    resourceNames: ["odh-dashboard-scoped"]
+    resourceNames: ["widget-operator-scoped"]
   # Watch namespace labels (only needed with NamespaceSelector)
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -185,7 +185,7 @@ type ScopingTarget struct {
 }
 
 type NamespaceSource struct {
-    FieldPath string  // e.g., ".spec.notebookController.notebookNamespace"
+    FieldPath string  // e.g., ".spec.workloadController.workloadNamespace"
 }
 ```
 
@@ -193,23 +193,23 @@ All of `WatchGVK.Kind`, `TargetSA.Name`, `TargetSA.Namespace`, `ClusterRoleName`
 
 ### Cross-Namespace Grants
 
-When an operator needs access to a namespace different from where its CR exists, use `TargetNamespaceSource`. For example, a Dashboard CR in `redhat-ods-applications` that needs access to `rhods-notebooks`:
+When an operator needs access to a namespace different from where its CR exists, use `TargetNamespaceSource`. For example, an operator CR in `widget-operator-system` that needs access to `workload-ns`:
 
 ```go
 scoper.ScopingTarget{
     WatchGVK: schema.GroupVersionKind{
-        Group:   "dashboard.opendatahub.io",
+        Group:   "apps.example.com",
         Version: "v1alpha1",
-        Kind:    "OdhDashboardConfig",
+        Kind:    "WidgetConfig",
     },
     TargetSA: types.NamespacedName{
-        Name:      "odh-dashboard",
-        Namespace: "redhat-ods-applications",
+        Name:      "widget-operator",
+        Namespace: "widget-operator-system",
     },
-    ClusterRoleName:       "odh-dashboard-notebooks",
-    ManagedRoleBindingName: "odh-dashboard-notebooks-binding",
+    ClusterRoleName:       "widget-operator-workloads",
+    ManagedRoleBindingName: "widget-operator-workloads-binding",
     TargetNamespaceSource: &scoper.NamespaceSource{
-        FieldPath: ".spec.notebookController.notebookNamespace",
+        FieldPath: ".spec.workloadController.workloadNamespace",
     },
 }
 ```

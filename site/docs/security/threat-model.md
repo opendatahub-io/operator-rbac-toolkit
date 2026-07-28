@@ -104,7 +104,7 @@ In this mode, compromising the platform operator SA grants the attacker both ope
 
 ### When to use each mode
 
-Use **embedded mode** when the platform operator is already highly privileged (e.g., RHOAI operator with cluster-admin-like permissions) and adding the scoping logic does not meaningfully increase its blast radius.
+Use **embedded mode** when the platform operator is already highly privileged (e.g., a platform operator with cluster-admin-like permissions) and adding the scoping logic does not meaningfully increase its blast radius.
 
 Use **standalone mode** for operators where trust domain separation is a compliance requirement.
 
@@ -116,7 +116,7 @@ Use **standalone mode** for operators where trust domain separation is a complia
 2. Attempt to list secrets in every namespace using `kubectl get secrets --all-namespaces --token=<token>`.
 3. Count the namespaces where the request succeeds and the total secrets accessible.
 
-### Example measurement (RHOAI Dashboard)
+### Example measurement (web console operator)
 
 | Scenario | Namespaces with secret access | Total secrets accessible |
 |----------|-------------------------------|------------------------|

@@ -26,12 +26,12 @@ func main() {
     saWebhook := saprotection.NewWebhook(
         saprotection.WebhookConfig{
             ProtectedServiceAccounts: []string{
-                "odh-dashboard",
+                "my-operator",
                 "my-operator-controller-manager",
             },
             AllowedIdentities: []string{
                 // The operator's own controller SA
-                "system:serviceaccount:redhat-ods-applications:odh-dashboard",
+                "system:serviceaccount:my-operator-system:my-operator",
                 // Kubernetes system controllers that create pods on behalf of Deployments/Jobs
                 "system:serviceaccount:kube-system:replicaset-controller",
                 "system:serviceaccount:kube-system:job-controller",
@@ -61,7 +61,7 @@ webhooks:
     clientConfig:
       service:
         name: my-operator-webhook-service
-        namespace: redhat-ods-applications
+        namespace: my-operator-system
         path: /validate-sa-protection
     failurePolicy: Fail
     sideEffects: None
@@ -78,7 +78,7 @@ webhooks:
 ## Label the Namespace to Enable Enforcement
 
 ```bash
-kubectl label namespace redhat-ods-applications operator-rbac-toolkit.io/sa-protection=true
+kubectl label namespace my-operator-system operator-rbac-toolkit.io/sa-protection=true
 ```
 
 ## How It Works

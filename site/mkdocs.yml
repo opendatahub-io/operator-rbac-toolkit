@@ -3,7 +3,7 @@ site_url: https://ugiordan.github.io/operator-rbac-toolkit
 repo_url: https://github.com/ugiordan/operator-rbac-toolkit
 repo_name: ugiordan/operator-rbac-toolkit
 edit_uri: edit/main/site/docs/
-copyright: Copyright &copy; Red Hat, Inc.
+copyright: Copyright &copy; Operator RBAC Toolkit Contributors
 theme:
   name: material
   language: en
@@ -104,7 +104,6 @@ nav:
     - Troubleshooting: integration/troubleshooting.md
   - Examples:
     - examples/index.md
-    - RHOAI Dashboard: examples/rhoai-dashboard.md
   - Design:
     - v1 vs v2: design/v1-vs-v2.md
     - Tradeoffs: design/tradeoffs.md

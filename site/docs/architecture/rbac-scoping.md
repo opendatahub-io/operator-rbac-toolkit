@@ -13,7 +13,7 @@ The controller runs with its own ServiceAccount, separate from the operators it 
 The scoping controller is available as:
 
 1. **Standalone binary** (`cmd/scoper`). Cluster admins deploy it as a separate Deployment with leader election enabled (recommended: 2 replicas). Suitable for clusters without an existing platform operator.
-2. **Importable Go package** (`pkg/scoper`). Platform operators (e.g., the RHOAI operator, which already reconciles DSC/DSCI) embed the scoping logic into their existing reconciliation loop. Zero additional deployment friction. The embedded library inherits the host operator's leader election and HA configuration.
+2. **Importable Go package** (`pkg/scoper`). Platform operators (e.g., a platform operator that already manages cluster configuration) embed the scoping logic into their existing reconciliation loop. Zero additional deployment friction. The embedded library inherits the host operator's leader election and HA configuration.
 
 Both options use the same `pkg/scoper` library. The standalone binary is a thin wrapper that reads configuration from a ConfigMap and starts the controller.
 
@@ -110,7 +110,7 @@ Multiple CRs of the same or different GVKs can exist in the same namespace. The 
 
 ### Cross-Namespace Grants
 
-When an operator needs access to a namespace different from where its CR exists (e.g., the Dashboard CR is in `redhat-ods-applications` but needs access to `rhods-notebooks`), the controller supports cross-namespace targets via `TargetNamespaceSource`.
+When an operator needs access to a namespace different from where its CR exists (e.g., the operator CR is in `operator-system` but needs access to `workload-ns`), the controller supports cross-namespace targets via `TargetNamespaceSource`.
 
 For cross-namespace RoleBindings, OwnerReferences cannot be used (Kubernetes does not allow cross-namespace OwnerReferences). The controller uses **annotation-based ownership** instead:
 
@@ -145,7 +145,7 @@ Requirements for the static ClusterRole:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: odh-dashboard-scoped
+  name: my-operator-scoped
   # No aggregationRule field
 rules:
   - apiGroups: [""]

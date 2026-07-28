@@ -87,7 +87,7 @@ What changes:
 
 ## Mapping to Modularization Concepts
 
-The 3-phase migration aligns with several concepts from the RHOAI modularization architecture (RHAISTRAT-1064):
+The 3-phase migration aligns with several concepts from modular operator architectures:
 
 ### Admin Acknowledgment Gates
 
@@ -101,7 +101,7 @@ Before Phase 3 can proceed, a precondition check verifies that all required Role
 
 ```bash
 # Check that all expected RoleBindings exist before removing the ClusterRoleBinding
-for ns in $(kubectl get dsci -o jsonpath='{.items[*].spec.applicationsNamespace}'); do
+for ns in $(kubectl get myplatformconfig -o jsonpath='{.items[*].spec.targetNamespace}'); do
   kubectl get rolebinding <binding-name> -n $ns || echo "MISSING: $ns"
 done
 ```
@@ -151,5 +151,4 @@ Each phase is independently reversible. A failure at any phase does not require 
 
 - [CNCF Operator White Paper](https://tag-app-delivery.cncf.io/whitepapers/operator/)
 - [Kubernetes RBAC Good Practices](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)
-- [RHOAI Dashboard Case Study](../examples/rhoai-dashboard.md) (concrete migration example)
 - [Architecture Overview](overview.md) (trust domain separation)

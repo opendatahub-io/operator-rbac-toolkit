@@ -12,7 +12,7 @@ This happens for three reasons:
 2. **Permission drift.** Features get removed or refactored, but the RBAC rules stay. Nobody audits the gap.
 3. **Over-granted verbs.** Rules specify every verb when only `list` is needed. Scaffolding tools generate broad defaults and developers don't refine them.
 
-A real-world audit of the RHOAI Dashboard's ClusterRole found that only 2 out of 30 rules were correctly scoped. 9 rules were entirely unused, and 14 were over-permissioned.
+A real-world audit of a production web console operator's ClusterRole found that only 2 out of 30 rules were correctly scoped. 9 rules were entirely unused, and 14 were over-permissioned.
 
 ## How It Works
 

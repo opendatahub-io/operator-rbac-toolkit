@@ -4,4 +4,4 @@ Real-world case studies showing how the Operator RBAC Toolkit solves concrete RB
 
 ## Available Examples
 
-- **[RHOAI Dashboard](rhoai-dashboard.md)**: Reducing a 30-rule ClusterRole to namespace-scoped access, cutting secret exposure from 43 in kube-system to 5 in the CR namespace.
+Examples are coming soon. The toolkit has been validated against production operators with 30+ rule ClusterRoles, reducing secret exposure from cluster-wide (43 secrets in kube-system alone) to namespace-scoped (5 secrets in the CR namespace).

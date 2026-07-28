@@ -14,11 +14,11 @@ The RBAC Scoping Controller can be deployed as a standalone binary or imported a
 | Trust domain | Full separation (separate SA) | Collapsed (shared with platform operator's SA) |
 | Upgrade path | Independent release cycle | Coupled to platform operator releases |
 | HA | Leader election with 2 replicas | Inherits host operator's HA |
-| Best for | Compliance-sensitive, multi-tenant, or untrusted operator environments | Clusters with an existing platform operator (e.g., RHOAI) where the platform operator is already highly privileged |
+| Best for | Compliance-sensitive, multi-tenant, or untrusted operator environments | Clusters with an existing platform operator where the platform operator is already highly privileged |
 
 **When to choose standalone:** compliance requirements demand trust domain separation, or the cluster runs operators from multiple vendors with different trust levels.
 
-**When to choose embedded:** a platform operator (e.g., the RHOAI operator) already exists, is already highly privileged, and adding the scoping logic does not meaningfully increase its blast radius.
+**When to choose embedded:** a platform operator already exists, is already highly privileged, and adding the scoping logic does not meaningfully increase its blast radius.
 
 ---
 

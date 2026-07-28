@@ -12,20 +12,20 @@ Three systemic patterns cause this:
 2. **Permission drift.** Features are removed or refactored, but the corresponding RBAC rules remain in the ClusterRole. Nobody audits the gap.
 3. **Over-granted verbs.** Rules specify `[get, list, watch, create, update, patch, delete]` when only `[list]` is needed. Scaffolding tools generate broad defaults and developers don't refine them.
 
-### Real-World Audit: RHOAI Dashboard
+### Real-World Audit: Web Console Operator
 
-A real-world audit of the RHOAI Dashboard's ClusterRole found that only **2 out of 30 rules** were correctly scoped:
+A real-world audit of a production web console operator's ClusterRole found that only **2 out of 30 rules** were correctly scoped:
 
 - **9 rules** were entirely unused
 - **14 rules** were over-permissioned
-- The `watch` verb was granted on nearly every resource despite never being used (the backend polls with `setInterval` + `list`, not the Kubernetes watch API)
+- The `watch` verb was granted on nearly every resource despite never being used (the backend polls with interval-based `list` calls, not the Kubernetes watch API)
 
 ### Why Standard RBAC Does Not Solve This
 
 Kubernetes RBAC provides the primitives to enforce least privilege, but it does not automate their application. The gap is operational, not technical:
 
 - **ClusterRoleBindings are the default.** When an operator needs cross-namespace access (e.g., to a notebooks namespace and a model registry namespace), developers grant a ClusterRoleBinding rather than creating per-namespace RoleBindings. The ClusterRoleBinding grants access everywhere.
-- **Namespace locations are dynamic.** Components like notebooks or model registries can be deployed to admin-configurable namespaces (via DSC/DSCI). Static RBAC manifests cannot target namespaces that are determined at runtime.
+- **Namespace locations are dynamic.** Components like workload runners or model registries can be deployed to admin-configurable namespaces. Static RBAC manifests cannot target namespaces that are determined at runtime.
 - **Nobody scopes after deployment.** Cluster admins install operators via OLM, Helm, or GitOps. The operator ships with a ClusterRole and ClusterRoleBinding. Nobody goes back to create namespace-scoped alternatives.
 
 ### Impact Assessment
@@ -57,7 +57,7 @@ This approach worked but conflated two distinct concerns:
 
 By having the operator do both, the architecture had structural problems:
 
-- **Self-modifying RBAC.** The operator needed the `escalate` verb (or `bind` verb) to manage its own permissions. A compromised SA could modify its own Roles, violating least privilege. The CNCF, Red Hat, NSA/CISA, and Kubernetes upstream documentation all warn against this pattern.
+- **Self-modifying RBAC.** The operator needed the `escalate` verb (or `bind` verb) to manage its own permissions. A compromised SA could modify its own Roles, violating least privilege. The CNCF, NSA/CISA, and Kubernetes upstream documentation all warn against this pattern.
 - **Broken trust boundary.** The producer and consumer of RBAC were the same entity. There was no independent authority validating or constraining the operator's permission grants.
 - **Complexity burden on operator authors.** Operator authors had to understand RBAC lifecycle management, drift recovery, and garbage collection. These are responsibilities that belong to the platform layer, not the application layer.
 

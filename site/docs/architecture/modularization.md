@@ -1,6 +1,6 @@
 # Modularization Alignment
 
-How the Operator RBAC Toolkit maps to modular operator architectures, using RHOAI's modularization (RHAISTRAT-1064) as a concrete example.
+How the Operator RBAC Toolkit maps to modular operator architectures.
 
 ## Central Orchestrator Pattern
 
@@ -11,9 +11,9 @@ Modular operator architectures converge on a central orchestrator that manages R
 | [Crossplane RBAC Manager](https://github.com/crossplane/crossplane/blob/main/design/design-doc-rbac-manager.md) | Dedicated RBAC controller | Holds `escalate` + `bind`, dynamically creates per-provider ClusterRoles and Bindings |
 | [OLM OperatorGroups](https://github.com/operator-framework/operator-lifecycle-manager/blob/master/doc/design/scoped-operator-install.md) | OLM controller | Creates scoped RoleBindings per OperatorGroup namespace |
 | [Cluster API Operator](https://github.com/kubernetes-sigs/cluster-api-operator/blob/main/docs/README.md) | CAPI Operator | Manages RBAC for infrastructure providers it installs |
-| **RHOAI Operator + pkg/scoper** | Embedded scoping controller | Holds `bind` only, creates per-module RoleBindings dynamically |
+| **Platform Operator + pkg/scoper** | Embedded scoping controller | Holds `bind` only, creates per-module RoleBindings dynamically |
 
-The RHOAI operator already serves as the central orchestrator (it reconciles the DSC/DSCI configuration and manages module lifecycle). Embedding `pkg/scoper` adds RBAC scoping to that existing role without introducing a new component.
+A platform operator that already serves as the central orchestrator (reconciling platform configuration and managing module lifecycle) can embed `pkg/scoper` to add RBAC scoping to that existing role without introducing a new component.
 
 ### Crossplane: Closest Precedent
 
@@ -27,20 +27,20 @@ The key difference: Crossplane's RBAC manager requires both `escalate` and `bind
 
 ## Mapping to Modular Architecture
 
-In a modularized RHOAI architecture, each component module (Dashboard, Model Controller, KServe, etc.) runs as an independent operator with its own ServiceAccount. The central orchestrator manages which modules are enabled and their configuration.
+In a modular architecture, each component module (Console, Model Controller, Serving, etc.) runs as an independent operator with its own ServiceAccount. The central orchestrator manages which modules are enabled and their configuration.
 
 ```mermaid
 flowchart TB
-    subgraph orchestrator ["RHOAI Orchestrator"]
-        DSC["DSC/DSCI\nConfiguration"]
+    subgraph orchestrator ["Platform Orchestrator"]
+        DSC["Platform\nConfiguration"]
         SCOPER["pkg/scoper\n(embedded)"]
         DSC --> SCOPER
     end
 
     subgraph modules ["Module Operators (each has own SA)"]
-        DASH["Dashboard\nModule"]
+        DASH["Console\nModule"]
         MC["Model Controller\nModule"]
-        KS["KServe\nModule"]
+        KS["Serving\nModule"]
         MORE["...other\nmodules"]
     end
 
@@ -50,7 +50,7 @@ flowchart TB
     end
 
     subgraph rbac ["Namespace-Scoped RBAC"]
-        RB1["RoleBinding\ndashboard-ns"]
+        RB1["RoleBinding\nconsole-ns"]
         RB2["RoleBinding\nmodels-ns"]
         RB3["RoleBinding\nserving-ns"]
     end
@@ -71,24 +71,13 @@ flowchart TB
     style modules fill:#e8f4fd,stroke:#2196F3,color:#000
     style shared fill:#fff3e0,stroke:#FF9800,color:#000
     style rbac fill:#e8f5e9,stroke:#4CAF50,color:#000
-    style DSC fill:#f3e5f5,stroke:#9C27B0,color:#000
-    style SCOPER fill:#f3e5f5,stroke:#9C27B0,color:#000
-    style DASH fill:#e8f4fd,stroke:#2196F3,color:#000
-    style MC fill:#e8f4fd,stroke:#2196F3,color:#000
-    style KS fill:#e8f4fd,stroke:#2196F3,color:#000
-    style MORE fill:#e8f4fd,stroke:#2196F3,color:#000
-    style GRACEFUL fill:#fff3e0,stroke:#FF9800,color:#000
-    style AUDIT fill:#fff3e0,stroke:#FF9800,color:#000
-    style RB1 fill:#e8f5e9,stroke:#4CAF50,color:#000
-    style RB2 fill:#e8f5e9,stroke:#4CAF50,color:#000
-    style RB3 fill:#e8f5e9,stroke:#4CAF50,color:#000
 ```
 
 ### Per-Module ServiceAccounts and Selective Enablement
 
-Each module operator gets its own ServiceAccount. The scoping library creates per-module RoleBindings dynamically as modules are enabled or disabled through the DSC configuration:
+Each module operator gets its own ServiceAccount. The scoping library creates per-module RoleBindings dynamically as modules are enabled or disabled through the platform configuration:
 
-- **Module enabled**: The scoping controller detects the module CR (or DSC field) and creates namespace-scoped RoleBindings for that module's SA in the namespaces it needs.
+- **Module enabled**: The scoping controller detects the module CR (or platform config field) and creates namespace-scoped RoleBindings for that module's SA in the namespaces it needs.
 - **Module disabled**: The scoping controller detects the CR deletion and garbage-collects the RoleBindings (via OwnerReference for same-namespace, annotation-based cleanup for cross-namespace).
 
 This means a disabled module has zero RBAC footprint. No RoleBindings exist for modules that aren't active. The blast radius of a compromised SA token is limited to the namespaces where that specific module is deployed.
@@ -101,7 +90,7 @@ The modularization architecture defines a "Shared Utilities Framework" consumed 
 |---------------|----------------|----------|---------|
 | Permission handling | `pkg/graceful` | Module operators | Wrap K8s API calls with structured degradation, status conditions, and retry logic |
 | Permission auditing | `pkg/audit` | Module operators, CI pipelines | Detect permission drift, unused rules, over-granted verbs |
-| RBAC scoping | `pkg/scoper` | Orchestrator only | Create per-module, per-namespace RoleBindings based on DSC configuration |
+| RBAC scoping | `pkg/scoper` | Orchestrator only | Create per-module, per-namespace RoleBindings based on platform configuration |
 
 The placement matters: `pkg/scoper` is embedded in the orchestrator (admin trust domain), while `pkg/graceful` and `pkg/audit` are consumed by module operators (operator trust domain). This maintains the trust domain separation described in the [Architecture Overview](overview.md).
 
@@ -114,18 +103,18 @@ The modularization architecture standardizes status conditions across modules:
 | `Ready` | `PermissionGranted` | `pkg/graceful` sets this when all required permissions are verified |
 | `Degraded` | `Degraded` (with RBAC reason) | `pkg/graceful` sets this when permissions are missing, includes the specific missing permission in the message |
 
-When modules become controller-runtime operators (3.5+), `pkg/graceful` is directly applicable. Each module's reconciler wraps its K8s API calls with `handler.Do()`, and the status conditions propagate naturally to the DSC's aggregated status.
+When modules are controller-runtime operators, `pkg/graceful` is directly applicable. Each module's reconciler wraps its K8s API calls with `handler.Do()`, and the status conditions propagate naturally to the platform's aggregated status.
 
-For modules that are not yet controller-runtime operators (e.g., the Dashboard's TypeScript/Go BFF architecture), the existing HTTP error handling covers the same functional need. See the [RHOAI Dashboard case study](../examples/rhoai-dashboard.md#handling-permission-errors-in-dashboard) for details.
+For modules that are not yet controller-runtime operators (e.g., a web console with a TypeScript/Go BFF architecture), the existing HTTP error handling covers the same functional need.
 
-## Applicability by Version
+## Applicability by Architecture Stage
 
-| RHOAI Version | Module Architecture | Scoper Applicable | Graceful Applicable |
-|---------------|--------------------|--------------------|---------------------|
-| 2.25, 3.3, 3.4 | Monolithic operator, shared SA | Yes (scopes existing SA) | Limited (non-controller-runtime backends) |
-| 3.5+ (planned) | Modular operators, per-module SAs | Yes (per-module scoping) | Yes (controller-runtime modules) |
+| Architecture | Module Architecture | Scoper Applicable | Graceful Applicable |
+|--------------|--------------------|--------------------|---------------------|
+| Monolithic | Single operator, shared SA | Yes (scopes existing SA) | Limited (non-controller-runtime backends) |
+| Modular | Independent operators, per-module SAs | Yes (per-module scoping) | Yes (controller-runtime modules) |
 
-The toolkit is useful today for scoping the existing shared SA. It becomes more powerful in the modularized architecture where each module has an independent SA and the orchestrator coordinates RBAC across all of them.
+The toolkit is useful today for scoping an existing shared SA. It becomes more powerful in a modularized architecture where each module has an independent SA and the orchestrator coordinates RBAC across all of them.
 
 ## References
 
