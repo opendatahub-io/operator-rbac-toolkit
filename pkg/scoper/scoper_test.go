@@ -297,7 +297,7 @@ func TestDriftDetection_RoleRefDrift(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingRB).Build()
 	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
 
-	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns")
+	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns", target.TargetSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestDriftDetection_SubjectsDrift(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingRB).Build()
 	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
 
-	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns")
+	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns", target.TargetSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestDriftDetection_NoDrift(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingRB).Build()
 	rec, _ := NewScopingReconciler(c, target, DenyListConfig{}, record.NewFakeRecorder(10))
 
-	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns")
+	err := rec.ensureRoleBindingSpec(context.Background(), existingRB, "target-ns", target.TargetSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -959,5 +959,268 @@ func TestBackfillPendingOwner_NoPendingOwner(t *testing.T) {
 
 	if len(updated.OwnerReferences) > 0 {
 		t.Error("expected no OwnerReference to be set when no pending-owner annotation exists")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveTargetSA tests (Options A, B, C)
+// ---------------------------------------------------------------------------
+
+func makeCR(namespace, name string, extra map[string]interface{}) *unstructured.Unstructured {
+	obj := map[string]interface{}{
+		"apiVersion": "test.io/v1",
+		"kind":       "Thing",
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": namespace,
+		},
+	}
+	for k, v := range extra {
+		obj[k] = v
+	}
+	return &unstructured.Unstructured{Object: obj}
+}
+
+func TestResolveTargetSA_Static(t *testing.T) {
+	target := ScopingTarget{
+		TargetSA: types.NamespacedName{Name: "my-sa", Namespace: "operator-ns"},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("app-ns", "my-cr", nil)
+
+	got, err := rec.resolveTargetSA(cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "my-sa" || got.Namespace != "operator-ns" {
+		t.Errorf("got %v, want {my-sa operator-ns}", got)
+	}
+}
+
+func TestResolveTargetSA_FieldPath_NameOnly(t *testing.T) {
+	target := ScopingTarget{
+		TargetSASource: &SASource{
+			NameFieldPath: ".spec.serviceAccountName",
+		},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("app-ns", "my-cr", map[string]interface{}{
+		"spec": map[string]interface{}{
+			"serviceAccountName": "tenant-sa",
+		},
+	})
+
+	got, err := rec.resolveTargetSA(cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Namespace should fall back to the CR's own namespace
+	if got.Name != "tenant-sa" || got.Namespace != "app-ns" {
+		t.Errorf("got %v, want {tenant-sa app-ns}", got)
+	}
+}
+
+func TestResolveTargetSA_FieldPath_NameAndNamespace(t *testing.T) {
+	target := ScopingTarget{
+		TargetSASource: &SASource{
+			NameFieldPath:      ".spec.serviceAccountName",
+			NamespaceFieldPath: ".spec.serviceAccountNamespace",
+		},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("app-ns", "my-cr", map[string]interface{}{
+		"spec": map[string]interface{}{
+			"serviceAccountName":      "tenant-sa",
+			"serviceAccountNamespace": "tenant-ns",
+		},
+	})
+
+	got, err := rec.resolveTargetSA(cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "tenant-sa" || got.Namespace != "tenant-ns" {
+		t.Errorf("got %v, want {tenant-sa tenant-ns}", got)
+	}
+}
+
+func TestResolveTargetSA_FieldPath_MissingField(t *testing.T) {
+	target := ScopingTarget{
+		TargetSASource: &SASource{
+			NameFieldPath: ".spec.serviceAccountName",
+		},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("app-ns", "my-cr", nil) // no spec.serviceAccountName
+
+	_, err := rec.resolveTargetSA(cr)
+	if err == nil {
+		t.Fatal("expected error for missing field, got nil")
+	}
+}
+
+func TestResolveTargetSA_Func(t *testing.T) {
+	called := false
+	target := ScopingTarget{
+		TargetSAFunc: func(cr *unstructured.Unstructured) types.NamespacedName {
+			called = true
+			return types.NamespacedName{Name: "computed-sa", Namespace: cr.GetNamespace() + "-ops"}
+		},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("my-ns", "my-cr", nil)
+
+	got, err := rec.resolveTargetSA(cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("TargetSAFunc was not called")
+	}
+	if got.Name != "computed-sa" || got.Namespace != "my-ns-ops" {
+		t.Errorf("got %v, want {computed-sa my-ns-ops}", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveRoleBindingName tests
+// ---------------------------------------------------------------------------
+
+func TestResolveRoleBindingName_Static(t *testing.T) {
+	target := ScopingTarget{ManagedRoleBindingName: "my-rb"}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("ns", "cr", nil)
+
+	if got := rec.resolveRoleBindingName(cr); got != "my-rb" {
+		t.Errorf("got %q, want %q", got, "my-rb")
+	}
+}
+
+func TestResolveRoleBindingName_Func(t *testing.T) {
+	target := ScopingTarget{
+		ManagedRoleBindingNameFunc: func(cr *unstructured.Unstructured) string {
+			return "rb-" + cr.GetName()
+		},
+	}
+	rec := &ScopingReconciler{Target: target}
+	cr := makeCR("ns", "tenant-a", nil)
+
+	if got := rec.resolveRoleBindingName(cr); got != "rb-tenant-a" {
+		t.Errorf("got %q, want %q", got, "rb-tenant-a")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validateTarget tests for new SA resolution options
+// ---------------------------------------------------------------------------
+
+func TestValidateTarget_NoSAOption(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error when no SA option is set")
+	}
+}
+
+func TestValidateTarget_MultipleSAOptions(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		TargetSA:               types.NamespacedName{Name: "sa", Namespace: "ns"},
+		TargetSAFunc:           func(*unstructured.Unstructured) types.NamespacedName { return types.NamespacedName{} },
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error when multiple SA options are set")
+	}
+}
+
+func TestValidateTarget_TargetSASource_MissingNameField(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		TargetSASource:         &SASource{NamespaceFieldPath: ".spec.ns"},
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error when NameFieldPath is empty")
+	}
+}
+
+func TestValidateTarget_TargetSASource_UnsafeNameField(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		TargetSASource:         &SASource{NameFieldPath: ".metadata.annotations.sa"},
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error for unsafe NameFieldPath")
+	}
+}
+
+func TestValidateTarget_TargetSASource_Valid(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		TargetSASource:         &SASource{NameFieldPath: ".spec.serviceAccountName"},
+	}
+	if err := validateTarget(target); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTarget_TargetSAFunc_Valid(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		TargetSAFunc:           func(*unstructured.Unstructured) types.NamespacedName { return types.NamespacedName{} },
+	}
+	if err := validateTarget(target); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTarget_ManagedRoleBindingNameFunc_NilStatic(t *testing.T) {
+	// ManagedRoleBindingNameFunc alone (without ManagedRoleBindingName) is valid
+	target := ScopingTarget{
+		WatchGVK:                   schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:            "role",
+		ManagedRoleBindingNameFunc: func(*unstructured.Unstructured) string { return "dynamic-rb" },
+		TargetSA:                   types.NamespacedName{Name: "sa", Namespace: "ns"},
+	}
+	if err := validateTarget(target); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTarget_LabelTriggerRejectedWithDynamicSA(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		NamespaceLabelTrigger:  &metav1.LabelSelector{MatchLabels: map[string]string{"env": "prod"}},
+		TargetSASource:         &SASource{NameFieldPath: ".spec.saName"},
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error for NamespaceLabelTrigger + TargetSASource")
+	}
+}
+
+func TestValidateTarget_WebhookRejectedWithDynamicSA(t *testing.T) {
+	target := ScopingTarget{
+		WatchGVK:               schema.GroupVersionKind{Kind: "Foo"},
+		ClusterRoleName:        "role",
+		ManagedRoleBindingName: "rb",
+		WebhookProvisioning:    true,
+		TargetSAFunc:           func(*unstructured.Unstructured) types.NamespacedName { return types.NamespacedName{} },
+	}
+	if err := validateTarget(target); err == nil {
+		t.Fatal("expected error for WebhookProvisioning + TargetSAFunc")
 	}
 }

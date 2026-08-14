@@ -443,14 +443,17 @@ type ScopingTarget struct {
     // The GVK of the Custom Resource to watch.
     WatchGVK schema.GroupVersionKind
 
-    // The ServiceAccount to grant access to.
-    TargetSA types.NamespacedName
-
     // The ClusterRole to reference in the RoleBinding. Must not use aggregationRule.
     ClusterRoleName string
 
-    // Deterministic name for managed RoleBindings. Enables drift detection and cleanup.
+    // Static name for the managed RoleBinding.
+    // Required unless ManagedRoleBindingNameFunc is set.
     ManagedRoleBindingName string
+
+    // Optional: derive the RoleBinding name dynamically from the CR.
+    // Use this when multiple CRs in the same namespace each need their own RoleBinding.
+    // If set, ManagedRoleBindingName can be left empty.
+    ManagedRoleBindingNameFunc func(*unstructured.Unstructured) string
 
     // Optional: restrict which namespaces are watched.
     // If nil, all namespaces are watched.
@@ -459,14 +462,110 @@ type ScopingTarget struct {
     // Optional: create RoleBinding in a different namespace than the CR.
     // Reads the target namespace from the specified field in the CR spec.
     TargetNamespaceSource *NamespaceSource
+
+    // SA resolution: exactly one of the following three must be set.
+
+    // Option A: static SA known at setup time.
+    TargetSA types.NamespacedName
+
+    // Option B: read SA name (and optionally namespace) from CR spec fields.
+    TargetSASource *SASource
+
+    // Option C: callback closure for complex runtime SA resolution.
+    TargetSAFunc func(*unstructured.Unstructured) types.NamespacedName
 }
 
 type NamespaceSource struct {
     FieldPath string  // e.g., ".spec.notebookController.notebookNamespace"
 }
+
+type SASource struct {
+    // Required. Must start with ".spec." to prevent privilege escalation
+    // (status/metadata fields could be written by less-privileged users).
+    NameFieldPath string
+
+    // Optional. If absent, the SA namespace falls back to the CR's own namespace.
+    // Must start with ".spec." when set.
+    NamespaceFieldPath string
+}
 ```
 
-All of `WatchGVK.Kind`, `TargetSA.Name`, `TargetSA.Namespace`, `ClusterRoleName`, and `ManagedRoleBindingName` are required. Validation happens at setup time.
+`WatchGVK.Kind`, `ClusterRoleName`, and exactly one SA resolution option are required. Validation happens at setup time.
+
+#### Choosing an SA Resolution Strategy
+
+The three options cover different use cases. Each team picks the one that fits their deployment model.
+
+| | Option A: `TargetSA` (static) | Option B: `TargetSASource` (field path) | Option C: `TargetSAFunc` (callback) |
+|---|---|---|---|
+| **When to use** | One well-known SA per operator deployment | Each tenant CR names its own SA in `.spec` | Complex logic: label lookup, multi-field joins, runtime config |
+| **Auditability** | Best: SA is visible in source code at setup | Good: SA derivation rule is in source; actual value is in CR spec | Lowest: logic lives in a closure |
+| **Failure mode** | Never fails (SA is fixed) | Returns error if the spec field is missing or empty | Depends on the closure (library never validates the return value) |
+| **Multi-tenant** | Works with `ManagedRoleBindingNameFunc` | Natural fit for per-tenant CRs | Natural fit for complex per-tenant routing |
+| **Security constraint** | None | Field path must start with `.spec.` (enforced by validation) | None — caller is fully responsible |
+
+**Option A: static SA**
+
+Use when a single operator SA needs access to every namespace where CRs appear. Simplest to audit because the SA is fixed at setup time.
+
+```go
+scoper.ScopingTarget{
+    WatchGVK:               myGVK,
+    ClusterRoleName:        "my-operator-role",
+    ManagedRoleBindingName: "my-operator-rb",
+    TargetSA: types.NamespacedName{
+        Name:      "my-operator",
+        Namespace: "my-operator-system",
+    },
+}
+```
+
+**Option B: SA name from CR spec field**
+
+Use when each tenant CR declares which SA should get access. The library reads the SA name from the field at `NameFieldPath`. If `NamespaceFieldPath` is also set, it reads the SA namespace from there; otherwise it falls back to the CR's own namespace.
+
+Field paths must start with `.spec.` — reading from `.metadata` or `.status` is blocked at validation time because those fields can be written by lower-privileged users.
+
+```go
+scoper.ScopingTarget{
+    WatchGVK:        myGVK,
+    ClusterRoleName: "my-operator-role",
+    // ManagedRoleBindingNameFunc prevents two CRs in the same namespace
+    // from overwriting each other's RoleBinding.
+    ManagedRoleBindingNameFunc: func(cr *unstructured.Unstructured) string {
+        return "my-rb-" + cr.GetName()
+    },
+    TargetSASource: &scoper.SASource{
+        NameFieldPath:      ".spec.serviceAccountName",
+        NamespaceFieldPath: ".spec.serviceAccountNamespace", // optional
+    },
+}
+```
+
+If the spec field is missing or empty, the reconcile returns an error and the RoleBinding is not created. The CR should be treated as misconfigured.
+
+**Option C: callback closure**
+
+Use when SA resolution requires logic that can't be expressed as a single field path: joining multiple fields, looking up an index, deriving the SA from a tenant ID, etc.
+
+```go
+scoper.ScopingTarget{
+    WatchGVK:        myGVK,
+    ClusterRoleName: "my-operator-role",
+    ManagedRoleBindingNameFunc: func(cr *unstructured.Unstructured) string {
+        return "rb-" + cr.GetName()
+    },
+    TargetSAFunc: func(cr *unstructured.Unstructured) types.NamespacedName {
+        tenantID, _, _ := unstructured.NestedString(cr.Object, "spec", "tenantID")
+        return types.NamespacedName{
+            Name:      "sa-" + tenantID,
+            Namespace: cr.GetNamespace() + "-ops",
+        }
+    },
+}
+```
+
+The library does not validate the return value. If the closure returns an empty `NamespacedName`, the RoleBinding is created with an empty subject — it is the caller's responsibility to return a valid SA. Use this option when Options A and B aren't expressive enough.
 
 #### Cross-Namespace Grants
 
