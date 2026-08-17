@@ -6,14 +6,14 @@
 </p>
 
 <p align="center">
-  <a href="http://ort-docs-operator-rbac-toolkit-docs.apps.secaudit.aws.rh-ods.com/">Documentation</a> |
-  <a href="docs/TECHNICAL_DESIGN.md">Technical Design</a> |
-  <a href="docs/INTEGRATION_GUIDE.md">Integration Guide</a>
+  <a href="https://opendatahub-io.github.io/operator-rbac-toolkit/">Documentation</a> |
+  <a href="https://opendatahub-io.github.io/operator-rbac-toolkit/architecture/overview/">Architecture</a> |
+  <a href="https://opendatahub-io.github.io/operator-rbac-toolkit/integration/rbac-scoping/">Integration Guide</a>
 </p>
 
 ## Why
 
-Operators routinely ship with overly broad ClusterRoles. A real-world audit of the RHOAI Dashboard found only 2 of 30 rules correctly scoped, 9 entirely unused, 14 over-permissioned. When an operator SA is compromised, ClusterRoleBindings let the attacker read secrets in every namespace.
+Operators routinely ship with overly broad ClusterRoles. A real-world audit of a production operator found only 2 of 30 rules correctly scoped, 9 entirely unused, 14 over-permissioned. When an operator SA is compromised, ClusterRoleBindings let the attacker read secrets in every namespace.
 
 The previous approach (operators manage their own RBAC at runtime) requires the `escalate` verb, which collapses the trust boundary between the entity being constrained and the entity doing the constraining. The CNCF, Red Hat, NSA/CISA, and Kubernetes upstream all warn against self-modifying RBAC.
 
