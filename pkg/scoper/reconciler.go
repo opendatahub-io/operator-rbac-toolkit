@@ -111,23 +111,61 @@ func (r *ScopingReconciler) isNamespaceAllowed(ctx context.Context, namespace st
 	return r.selector.Matches(labels.Set(ns.Labels))
 }
 
+// resolveTargetSA returns the SA for the given CR using whichever resolution
+// strategy is configured on the target (static, field path, or callback).
+// Returns an error only for TargetSASource when a required field is missing.
+func (r *ScopingReconciler) resolveTargetSA(cr *unstructured.Unstructured) (types.NamespacedName, error) {
+	if r.Target.TargetSAFunc != nil {
+		return r.Target.TargetSAFunc(cr), nil
+	}
+	if r.Target.TargetSASource != nil {
+		name, err := extractFieldValue(cr, r.Target.TargetSASource.NameFieldPath)
+		if err != nil {
+			return types.NamespacedName{}, fmt.Errorf("resolving SA name from %s: %w", r.Target.TargetSASource.NameFieldPath, err)
+		}
+		ns := cr.GetNamespace()
+		if r.Target.TargetSASource.NamespaceFieldPath != "" {
+			ns, err = extractFieldValue(cr, r.Target.TargetSASource.NamespaceFieldPath)
+			if err != nil {
+				return types.NamespacedName{}, fmt.Errorf("resolving SA namespace from %s: %w", r.Target.TargetSASource.NamespaceFieldPath, err)
+			}
+		}
+		return types.NamespacedName{Name: name, Namespace: ns}, nil
+	}
+	return r.Target.TargetSA, nil
+}
+
+// resolveRoleBindingName returns the RoleBinding name to use for the given CR.
+func (r *ScopingReconciler) resolveRoleBindingName(cr *unstructured.Unstructured) string {
+	if r.Target.ManagedRoleBindingNameFunc != nil {
+		return r.Target.ManagedRoleBindingNameFunc(cr)
+	}
+	return r.Target.ManagedRoleBindingName
+}
+
 func (r *ScopingReconciler) ensureRoleBinding(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string) error {
 	logger := log.FromContext(ctx)
 	rbName := types.NamespacedName{
-		Name:      r.Target.ManagedRoleBindingName,
+		Name:      r.resolveRoleBindingName(cr),
 		Namespace: targetNamespace,
 	}
 
+	targetSA, err := r.resolveTargetSA(cr)
+	if err != nil {
+		logger.Error(err, "failed to resolve target SA from CR")
+		return err
+	}
+
 	existing := &rbacv1.RoleBinding{}
-	err := r.Get(ctx, rbName, existing)
+	err = r.Get(ctx, rbName, existing)
 	if apierrors.IsNotFound(err) {
-		return r.createRoleBinding(ctx, cr, targetNamespace)
+		return r.createRoleBinding(ctx, cr, targetNamespace, targetSA)
 	}
 	if err != nil {
 		return err
 	}
 
-	if err := r.ensureRoleBindingSpec(ctx, existing, targetNamespace); err != nil {
+	if err := r.ensureRoleBindingSpec(ctx, existing, targetNamespace, targetSA); err != nil {
 		return err
 	}
 
@@ -177,7 +215,7 @@ func (r *ScopingReconciler) ensureRoleBinding(ctx context.Context, cr *unstructu
 
 // ensureRoleBindingSpec detects drift in RoleRef and Subjects and corrects it.
 // RoleRef is immutable in Kubernetes, so if it differs we must delete and recreate.
-func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing *rbacv1.RoleBinding, targetNamespace string) error {
+func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing *rbacv1.RoleBinding, targetNamespace string, targetSA types.NamespacedName) error {
 	logger := log.FromContext(ctx)
 	expectedRoleRef := rbacv1.RoleRef{
 		APIGroup: rbacv1.GroupName,
@@ -187,8 +225,8 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 	expectedSubjects := []rbacv1.Subject{
 		{
 			Kind:      rbacv1.ServiceAccountKind,
-			Name:      r.Target.TargetSA.Name,
-			Namespace: r.Target.TargetSA.Namespace,
+			Name:      targetSA.Name,
+			Namespace: targetSA.Namespace,
 		},
 	}
 
@@ -259,11 +297,12 @@ func (r *ScopingReconciler) ensureRoleBindingSpec(ctx context.Context, existing 
 	})
 }
 
-func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string) error {
+func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string, targetSA types.NamespacedName) error {
 	logger := log.FromContext(ctx)
+	rbName := r.resolveRoleBindingName(cr)
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.Target.ManagedRoleBindingName,
+			Name:      rbName,
 			Namespace: targetNamespace,
 			Labels: map[string]string{
 				ManagedLabelKey: ManagedLabelValue,
@@ -280,8 +319,8 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      rbacv1.ServiceAccountKind,
-				Name:      r.Target.TargetSA.Name,
-				Namespace: r.Target.TargetSA.Namespace,
+				Name:      targetSA.Name,
+				Namespace: targetSA.Namespace,
 			},
 		},
 	}
@@ -299,7 +338,7 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 		rb.Annotations[OwnerAnnotationKey] = FormatOwnerAnnotation([]OwnerEntry{entry})
 	}
 
-	logger.Info("creating RoleBinding", "namespace", targetNamespace, "name", r.Target.ManagedRoleBindingName)
+	logger.Info("creating RoleBinding", "namespace", targetNamespace, "name", rbName)
 	if err := r.Create(ctx, rb); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Another controller or concurrent reconcile created it, treat as success
@@ -314,7 +353,7 @@ func (r *ScopingReconciler) createRoleBinding(ctx context.Context, cr *unstructu
 		source = "reconciler-annotation"
 	}
 	roleBindingCreatedTotal.WithLabelValues(
-		fmt.Sprintf("%s/%s", r.Target.TargetSA.Namespace, r.Target.TargetSA.Name),
+		fmt.Sprintf("%s/%s", targetSA.Namespace, targetSA.Name),
 		targetNamespace,
 		source,
 	).Inc()
@@ -381,7 +420,7 @@ func parsePendingOwner(annotation string) (namespace, name string, timestamp tim
 func (r *ScopingReconciler) backfillPendingOwner(ctx context.Context, cr *unstructured.Unstructured, targetNamespace string) error {
 	logger := log.FromContext(ctx)
 	rbName := types.NamespacedName{
-		Name:      r.Target.ManagedRoleBindingName,
+		Name:      r.resolveRoleBindingName(cr),
 		Namespace: targetNamespace,
 	}
 

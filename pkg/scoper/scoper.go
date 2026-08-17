@@ -77,7 +77,7 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 
 		logger.Info("registered scoping controller",
 			"gvk", target.WatchGVK.String(),
-			"targetSA", fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
+			"targetSA", targetSALogValue(target),
 			"clusterRole", target.ClusterRoleName)
 
 		// Register label trigger controller if NamespaceLabelTrigger is configured
@@ -96,7 +96,7 @@ func Setup(mgr ctrl.Manager, cfg Config) error {
 			}
 
 			logger.Info("registered label trigger controller",
-				"targetSA", fmt.Sprintf("%s/%s", target.TargetSA.Namespace, target.TargetSA.Name),
+				"targetSA", targetSALogValue(target),
 				"clusterRole", target.ClusterRoleName)
 		}
 	}
@@ -125,21 +125,53 @@ func validateTarget(t ScopingTarget) error {
 	if t.WatchGVK.Kind == "" {
 		return fmt.Errorf("WatchGVK.Kind is required")
 	}
-	if t.TargetSA.Name == "" || t.TargetSA.Namespace == "" {
-		return fmt.Errorf("TargetSA name and namespace are required")
-	}
 	if t.ClusterRoleName == "" {
 		return fmt.Errorf("ClusterRoleName is required")
 	}
-	if t.ManagedRoleBindingName == "" {
-		return fmt.Errorf("ManagedRoleBindingName is required")
+	if t.ManagedRoleBindingName == "" && t.ManagedRoleBindingNameFunc == nil {
+		return fmt.Errorf("ManagedRoleBindingName or ManagedRoleBindingNameFunc is required")
 	}
+
+	// Exactly one SA resolution strategy must be set.
+	saOptions := 0
+	if t.TargetSA.Name != "" {
+		saOptions++
+	}
+	if t.TargetSASource != nil {
+		saOptions++
+	}
+	if t.TargetSAFunc != nil {
+		saOptions++
+	}
+	if saOptions == 0 {
+		return fmt.Errorf("one of TargetSA, TargetSASource, or TargetSAFunc is required")
+	}
+	if saOptions > 1 {
+		return fmt.Errorf("only one of TargetSA, TargetSASource, or TargetSAFunc may be set")
+	}
+
+	if t.TargetSA.Name != "" && t.TargetSA.Namespace == "" {
+		return fmt.Errorf("TargetSA.Namespace is required when TargetSA is set")
+	}
+
+	if t.TargetSASource != nil {
+		if t.TargetSASource.NameFieldPath == "" {
+			return fmt.Errorf("TargetSASource.NameFieldPath is required")
+		}
+		for _, fp := range []string{t.TargetSASource.NameFieldPath, t.TargetSASource.NamespaceFieldPath} {
+			if fp == "" {
+				continue
+			}
+			normalized := strings.TrimPrefix(fp, ".")
+			if !strings.HasPrefix(normalized, "spec.") {
+				return fmt.Errorf("TargetSASource field paths must start with \".spec.\" to prevent reading user-controlled fields, got %q", fp)
+			}
+		}
+	}
+
 	if t.TargetNamespaceSource != nil {
 		fp := t.TargetNamespaceSource.FieldPath
-		normalized := fp
-		if strings.HasPrefix(normalized, ".") {
-			normalized = normalized[1:]
-		}
+		normalized := strings.TrimPrefix(fp, ".")
 		if !strings.HasPrefix(normalized, "spec.") {
 			return fmt.Errorf("TargetNamespaceSource.FieldPath must start with \".spec.\" to prevent reading user-controlled fields, got %q", fp)
 		}
@@ -149,6 +181,12 @@ func validateTarget(t ScopingTarget) error {
 	}
 	if t.NamespaceLabelTrigger != nil && t.TargetNamespaceSource != nil {
 		return fmt.Errorf("NamespaceLabelTrigger cannot be used with TargetNamespaceSource (label trigger is same-namespace only)")
+	}
+	if t.NamespaceLabelTrigger != nil && (t.TargetSASource != nil || t.TargetSAFunc != nil) {
+		return fmt.Errorf("NamespaceLabelTrigger cannot be used with TargetSASource or TargetSAFunc (label trigger fires from Namespace events, not CR events — SA cannot be resolved without a CR)")
+	}
+	if t.WebhookProvisioning && (t.TargetSASource != nil || t.TargetSAFunc != nil) {
+		return fmt.Errorf("WebhookProvisioning cannot be used with TargetSASource or TargetSAFunc (webhook fires before CR exists — SA cannot be resolved without a CR)")
 	}
 	return nil
 }
@@ -187,4 +225,17 @@ func namespaceToRequests(c client.Client, target ScopingTarget) handler.MapFunc 
 func isCRDAvailable(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
 	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 	return err == nil
+}
+
+// targetSALogValue returns a human-readable SA descriptor for logging. For
+// static TargetSA targets it returns "namespace/name"; for dynamic options it
+// returns a descriptive placeholder.
+func targetSALogValue(t ScopingTarget) string {
+	if t.TargetSA.Name != "" {
+		return fmt.Sprintf("%s/%s", t.TargetSA.Namespace, t.TargetSA.Name)
+	}
+	if t.TargetSASource != nil {
+		return fmt.Sprintf("<field:%s>", t.TargetSASource.NameFieldPath)
+	}
+	return "<func>"
 }
