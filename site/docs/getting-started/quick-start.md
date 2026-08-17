@@ -41,7 +41,7 @@ Create a `graceful.Handler` during reconciler setup. The handler needs a `record
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
     ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -123,7 +123,7 @@ When a previously-denied permission is restored, the handler automatically sets 
 
 ## That's It
 
-No webhooks, no CRDs, no additional deployments. Just `go get github.com/ugiordan/operator-rbac-toolkit` and wire it in.
+No webhooks, no CRDs, no additional deployments. Just `go get github.com/opendatahub-io/operator-rbac-toolkit` and wire it in.
 
 The default backoff sequence is: 30s, 60s, 120s, 240s, 300s (capped at 5 minutes). Customize with functional options:
 

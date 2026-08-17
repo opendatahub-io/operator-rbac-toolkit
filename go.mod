@@ -1,4 +1,4 @@
-module github.com/ugiordan/operator-rbac-toolkit
+module github.com/opendatahub-io/operator-rbac-toolkit
 
 go 1.26.0
 

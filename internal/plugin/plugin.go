@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/common"
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/generators"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/common"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/generators"
 	"sigs.k8s.io/kubebuilder/v4/pkg/plugin/external"
 )
 

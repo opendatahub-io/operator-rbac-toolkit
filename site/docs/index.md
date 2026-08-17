@@ -57,7 +57,7 @@ The most common integration path: add graceful degradation to an existing operat
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
 )
 
 // 1. Your CR must implement StatusProvider.
@@ -102,7 +102,7 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 }
 ```
 
-No webhooks, no CRDs, no additional deployments. Just `go get github.com/ugiordan/operator-rbac-toolkit` and wire it in.
+No webhooks, no CRDs, no additional deployments. Just `go get github.com/opendatahub-io/operator-rbac-toolkit` and wire it in.
 
 ## Next Steps
 

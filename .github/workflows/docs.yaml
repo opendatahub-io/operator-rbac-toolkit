@@ -1,16 +1,12 @@
 name: Deploy Docs
 
-# Disabled while repo is private (GitHub Pages requires public repo on free plans).
-# Uncomment the triggers below when the repo becomes public.
-# on:
-#   workflow_dispatch:
-#   push:
-#     branches: [main]
-#     paths:
-#       - 'site/**'
-#       - 'README.md'
-
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'README.md'
 
 permissions:
   contents: write

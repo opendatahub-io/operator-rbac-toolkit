@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/common"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/common"
 )
 
 // PluginState is persisted to .ort-plugin-state.json.

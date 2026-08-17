@@ -6,7 +6,7 @@ The impersonation guard (`pkg/impersonation`) closes a privilege escalation path
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/impersonation"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/impersonation"
     ctrl "sigs.k8s.io/controller-runtime"
 )
 

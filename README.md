@@ -32,7 +32,7 @@ Each deploys independently. They're complementary, not coupled.
 Add graceful degradation to an existing operator (zero additional deployments):
 
 ```go
-import "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+import "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
 
 func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
     cr := &v1alpha1.MyCR{}

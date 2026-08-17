@@ -1,7 +1,7 @@
 site_name: Operator RBAC Toolkit
-site_url: https://ugiordan.github.io/operator-rbac-toolkit
-repo_url: https://github.com/ugiordan/operator-rbac-toolkit
-repo_name: ugiordan/operator-rbac-toolkit
+site_url: https://opendatahub-io.github.io/operator-rbac-toolkit
+repo_url: https://github.com/opendatahub-io/operator-rbac-toolkit
+repo_name: opendatahub-io/operator-rbac-toolkit
 edit_uri: edit/main/site/docs/
 copyright: Copyright &copy; Operator RBAC Toolkit Contributors
 theme:

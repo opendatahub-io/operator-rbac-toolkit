@@ -1,7 +1,7 @@
 package generators
 
 import (
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/common"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/common"
 )
 
 // GenerateConfig generates pkg/security/config.go with OperatorIdentity,

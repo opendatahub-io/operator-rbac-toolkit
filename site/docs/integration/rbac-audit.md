@@ -6,7 +6,7 @@ The RBAC audit package (`pkg/audit`) scans the cluster at startup to identify RB
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/audit"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/audit"
     rbacv1 "k8s.io/api/rbac/v1"
     "k8s.io/apimachinery/pkg/types"
 )

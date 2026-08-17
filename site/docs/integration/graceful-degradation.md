@@ -46,7 +46,7 @@ Create a `graceful.Handler` during reconciler setup. The handler needs a `record
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
     ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -131,7 +131,7 @@ When a previously-denied permission is restored, the handler automatically sets 
 Use `DiscoverPermissions` to check which permissions your SA has at startup or on demand. This uses `SelfSubjectAccessReview` calls, rate-limited by `MaxConcurrency`:
 
 ```go
-import "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+import "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
 
 func (r *MyReconciler) checkPermissionsAtStartup(ctx context.Context) error {
     report, err := graceful.DiscoverPermissions(ctx, r.Client, graceful.PermissionSpec{

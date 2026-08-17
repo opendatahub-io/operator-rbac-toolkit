@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/common"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/common"
 	"sigs.k8s.io/yaml"
 )
 

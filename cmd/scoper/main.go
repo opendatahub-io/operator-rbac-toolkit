@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/ugiordan/operator-rbac-toolkit/pkg/scoper"
+	"github.com/opendatahub-io/operator-rbac-toolkit/pkg/scoper"
 )
 
 // fileConfig is the YAML-friendly representation of scoper.Config.

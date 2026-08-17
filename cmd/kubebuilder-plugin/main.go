@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin"
 	"sigs.k8s.io/kubebuilder/v4/pkg/plugin/external"
 )
 

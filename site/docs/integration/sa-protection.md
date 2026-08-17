@@ -6,7 +6,7 @@ The SA protection webhook (`pkg/saprotection`) prevents unauthorized workloads f
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/saprotection"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/saprotection"
     "sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 

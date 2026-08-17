@@ -1,7 +1,7 @@
 package generators
 
 import (
-	"github.com/ugiordan/operator-rbac-toolkit/internal/plugin/common"
+	"github.com/opendatahub-io/operator-rbac-toolkit/internal/plugin/common"
 )
 
 // GenerateAudit generates pkg/security/audit_setup.go with the RBAC audit

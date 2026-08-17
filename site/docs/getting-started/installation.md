@@ -3,7 +3,7 @@
 ## Install the Module
 
 ```bash
-go get github.com/ugiordan/operator-rbac-toolkit@latest
+go get github.com/opendatahub-io/operator-rbac-toolkit@latest
 ```
 
 ## Packages
@@ -38,13 +38,13 @@ Your operator must be built with [controller-runtime](https://github.com/kuberne
 For most operator authors, the only import you need is `pkg/graceful`:
 
 ```go
-import "github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+import "github.com/opendatahub-io/operator-rbac-toolkit/pkg/graceful"
 ```
 
 For cluster admins deploying the scoping controller as an embedded library:
 
 ```go
-import "github.com/ugiordan/operator-rbac-toolkit/pkg/scoper"
+import "github.com/opendatahub-io/operator-rbac-toolkit/pkg/scoper"
 ```
 
 For the standalone scoping controller binary, no import is needed. Deploy `cmd/scoper` as a separate Deployment.

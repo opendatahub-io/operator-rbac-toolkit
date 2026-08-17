@@ -33,7 +33,7 @@ This is the simplest integration. Import `pkg/scoper` and call `scoper.Setup()` 
 
 ```go
 import (
-    "github.com/ugiordan/operator-rbac-toolkit/pkg/scoper"
+    "github.com/opendatahub-io/operator-rbac-toolkit/pkg/scoper"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/runtime/schema"
     "k8s.io/apimachinery/pkg/types"
