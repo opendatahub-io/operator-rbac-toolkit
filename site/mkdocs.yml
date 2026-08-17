@@ -96,6 +96,7 @@ nav:
     - integration/index.md
     - Graceful Degradation: integration/graceful-degradation.md
     - RBAC Scoping: integration/rbac-scoping.md
+    - Cross-Namespace RBAC: integration/crossns.md
     - Multi-Tenant SA Resolution: integration/multi-tenancy.md
     - SA Protection: integration/sa-protection.md
     - Impersonation Guard: integration/impersonation-guard.md

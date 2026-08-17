@@ -5,6 +5,7 @@ This section covers the complete integration reference for operator authors and 
 ## For Operator Authors
 
 - **[Graceful Degradation](graceful-degradation.md)**: Handle `Forbidden` errors gracefully with status conditions, events, and exponential backoff retry.
+- **[Cross-Namespace RBAC](crossns.md)**: Create and lifecycle-manage Role+RoleBinding pairs in foreign namespaces, with stale-sweep GC that handles namespace field changes without orphaning resources.
 - **[RBAC Audit](rbac-audit.md)**: Scan and report on RBAC permissions at startup and runtime.
 
 ## For Cluster Admins

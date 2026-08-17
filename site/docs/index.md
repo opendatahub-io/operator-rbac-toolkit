@@ -22,6 +22,7 @@ The toolkit is split into three independent components. Each can be deployed on 
 |-----------|-------|-------------|---------------------------|
 | **Graceful Degradation Library** (`pkg/graceful`) | Operator author | Handles `Forbidden` errors gracefully: sets status conditions, emits events, retries with backoff | No. Zero RBAC write verbs. |
 | **RBAC Scoping Controller** (`pkg/scoper`, `cmd/scoper`) | Cluster admin | Watches CRs, creates namespace-scoped RoleBindings, garbage collects on CR deletion | Yes, but only `bind` on specific ClusterRoles (no `escalate`). |
+| **Cross-Namespace RBAC** (`pkg/crossns`) | Operator author | Creates Role+RoleBinding pairs in foreign namespaces with stale-sweep GC; solves the owner-reference cross-namespace gap | Yes, `get/list/create/update/delete` on roles and rolebindings. |
 | **Defense-in-Depth Toolkit** (`pkg/audit`, `pkg/saprotection`, `pkg/impersonation`) | Cluster admin | RBAC auditing, SA identity protection webhook, impersonation bypass closure, VAP templates | Varies by component. |
 
 ## Architecture
