@@ -72,6 +72,7 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 |---------|-------------|
 | `pkg/graceful` | Permission-aware error handling, status conditions, permission discovery via SSAR |
 | `pkg/scoper` | RoleBinding lifecycle controller with drift detection, deny-list, namespace selectors |
+| `pkg/crossns` | Cross-namespace Role+RoleBinding lifecycle with stale-sweep GC (for cluster-scoped CRs) |
 | `pkg/audit` | RBAC scanner (impersonation, token exposure, unused permissions, aggregation rules) |
 | `pkg/saprotection` | Webhook preventing unauthorized use of operator SA identity |
 | `pkg/impersonation` | Reconciler closing the `system:aggregate-to-edit` impersonation bypass |
