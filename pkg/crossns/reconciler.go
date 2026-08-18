@@ -27,6 +27,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -162,25 +163,27 @@ func (r *Reconciler) applyRole(ctx context.Context, rs RuleSet) error {
 		Rules: rs.Rules,
 	}
 
-	existing := &rbacv1.Role{}
-	err := r.client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
-	if k8serrors.IsNotFound(err) {
-		if createErr := r.client.Create(ctx, desired); createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
-			return fmt.Errorf("creating Role %s/%s: %w", rs.Namespace, rs.RoleName, createErr)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing := &rbacv1.Role{}
+		err := r.client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+		if k8serrors.IsNotFound(err) {
+			if createErr := r.client.Create(ctx, desired); createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
+				return fmt.Errorf("creating Role %s/%s: %w", rs.Namespace, rs.RoleName, createErr)
+			}
+			return nil
 		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getting Role %s/%s: %w", rs.Namespace, rs.RoleName, err)
-	}
+		if err != nil {
+			return fmt.Errorf("getting Role %s/%s: %w", rs.Namespace, rs.RoleName, err)
+		}
 
-	updatedLabels := mergeLabels(existing.Labels, desired.Labels)
-	if reflect.DeepEqual(existing.Rules, desired.Rules) && reflect.DeepEqual(existing.Labels, updatedLabels) {
-		return nil
-	}
-	existing.Rules = desired.Rules
-	existing.Labels = updatedLabels
-	return r.client.Update(ctx, existing)
+		updatedLabels := mergeLabels(existing.Labels, desired.Labels)
+		if reflect.DeepEqual(existing.Rules, desired.Rules) && reflect.DeepEqual(existing.Labels, updatedLabels) {
+			return nil
+		}
+		existing.Rules = desired.Rules
+		existing.Labels = updatedLabels
+		return r.client.Update(ctx, existing)
+	})
 }
 
 func (r *Reconciler) applyRoleBinding(ctx context.Context, subject SubjectRef, rs RuleSet) error {
@@ -203,39 +206,41 @@ func (r *Reconciler) applyRoleBinding(ctx context.Context, subject SubjectRef, r
 		}},
 	}
 
-	existing := &rbacv1.RoleBinding{}
-	err := r.client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
-	if k8serrors.IsNotFound(err) {
-		if createErr := r.client.Create(ctx, desired); createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
-			return fmt.Errorf("creating RoleBinding %s/%s: %w", rs.Namespace, rbName, createErr)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing := &rbacv1.RoleBinding{}
+		err := r.client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+		if k8serrors.IsNotFound(err) {
+			if createErr := r.client.Create(ctx, desired); createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
+				return fmt.Errorf("creating RoleBinding %s/%s: %w", rs.Namespace, rbName, createErr)
+			}
+			return nil
 		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getting RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
-	}
+		if err != nil {
+			return fmt.Errorf("getting RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
+		}
 
-	// RoleRef is immutable in Kubernetes — if it drifted the binding must be
-	// deleted and recreated. In practice this should not happen since the role
-	// name comes from a constant in the operator, but we defend against it.
-	if existing.RoleRef != desired.RoleRef {
-		if err := r.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("deleting drifted RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
+		// RoleRef is immutable in Kubernetes — if it drifted the binding must be
+		// deleted and recreated. In practice this should not happen since the role
+		// name comes from a constant in the operator, but we defend against it.
+		if existing.RoleRef != desired.RoleRef {
+			if err := r.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("deleting drifted RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
+			}
+			fresh := desired.DeepCopy()
+			if err := r.client.Create(ctx, fresh); err != nil && !k8serrors.IsAlreadyExists(err) {
+				return fmt.Errorf("recreating RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
+			}
+			return nil
 		}
-		fresh := desired.DeepCopy()
-		if err := r.client.Create(ctx, fresh); err != nil && !k8serrors.IsAlreadyExists(err) {
-			return fmt.Errorf("recreating RoleBinding %s/%s: %w", rs.Namespace, rbName, err)
-		}
-		return nil
-	}
 
-	updatedLabels := mergeLabels(existing.Labels, desired.Labels)
-	if reflect.DeepEqual(existing.Subjects, desired.Subjects) && reflect.DeepEqual(existing.Labels, updatedLabels) {
-		return nil
-	}
-	existing.Subjects = desired.Subjects
-	existing.Labels = updatedLabels
-	return r.client.Update(ctx, existing)
+		updatedLabels := mergeLabels(existing.Labels, desired.Labels)
+		if reflect.DeepEqual(existing.Subjects, desired.Subjects) && reflect.DeepEqual(existing.Labels, updatedLabels) {
+			return nil
+		}
+		existing.Subjects = desired.Subjects
+		existing.Labels = updatedLabels
+		return r.client.Update(ctx, existing)
+	})
 }
 
 // listOptions returns the MatchingLabels for cluster-wide list queries.
