@@ -5,10 +5,10 @@ package security
 import (
 	"k8s.io/apimachinery/pkg/types"
 {{- if .SAProtection }}
-	"github.com/ugiordan/operator-rbac-toolkit/pkg/saprotection"
+	"github.com/opendatahub-io/operator-rbac-toolkit/pkg/saprotection"
 {{- end }}
 {{- if .RBACAudit }}
-	"github.com/ugiordan/operator-rbac-toolkit/pkg/audit"
+	"github.com/opendatahub-io/operator-rbac-toolkit/pkg/audit"
 {{- end }}
 )
 

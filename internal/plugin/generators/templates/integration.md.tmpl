@@ -13,7 +13,7 @@ scaffolded here.
 Update your `go.mod`:
 
 ```bash
-go get github.com/ugiordan/operator-rbac-toolkit@v{{ .ToolkitVersion }}
+go get github.com/opendatahub-io^operator-rbac-toolkit@v{{ .ToolkitVersion }}
 ```
 
 ## Step 2: Review Security Configuration
@@ -36,9 +36,9 @@ Add the following imports and setup code to your `cmd/main.go`:
 ```go
 import (
 	"{{ .ModulePath }}/pkg/security"
-	"github.com/ugiordan/operator-rbac-toolkit/pkg/graceful"
+	"github.com/opendatahub-io^operator-rbac-toolkit/pkg/graceful"
 {{- if .SAProtection }}
-	"github.com/ugiordan/operator-rbac-toolkit/pkg/saprotection"
+	"github.com/opendatahub-io^operator-rbac-toolkit/pkg/saprotection"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 {{- end }}
 )
@@ -213,4 +213,4 @@ Ensure cert-manager is installed or webhook certificates are provisioned.
 {{- end }}
 
 For more details, see the operator-rbac-toolkit documentation at:
-https://github.com/ugiordan/operator-rbac-toolkit
+https://github.com/opendatahub-io^operator-rbac-toolkit
